@@ -4,3 +4,4 @@ secrets.yaml
 node_modules/
 *.wasm
 bun.lock
+.cre_build_tmp.js

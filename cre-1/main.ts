@@ -146,17 +146,18 @@ const callGemini = (runtime: Runtime<Config>, prompt: string): GeminiAnalysis =>
 		},
 	})
 
-	// GEMINI_API_KEY injected from VaultDON secrets into the x-goog-api-key header
+	// GEMINI_API_KEY is injected from secrets.yaml env-var mapping via vaultDonSecrets.
+	// Template uses Go-style dot prefix: {{.GEMINI_API_KEY}}
 	const response = client
 		.sendRequest(runtime, {
-			vaultDonSecrets: [{ key: 'GEMINI_API_KEY', namespace: 'safemarket-wf1' }],
+			vaultDonSecrets: [{ key: 'GEMINI_API_KEY' }],
 			request: {
 				url: `https://generativelanguage.googleapis.com/v1beta/models/${runtime.config.geminiModel}:generateContent`,
 				method: 'POST',
 				bodyString: requestBody,
 				multiHeaders: {
 					'Content-Type': { values: ['application/json'] },
-					'x-goog-api-key': { values: ['{{GEMINI_API_KEY}}'] },
+					'x-goog-api-key': { values: ['{{.GEMINI_API_KEY}}'] },
 				},
 			},
 		})
