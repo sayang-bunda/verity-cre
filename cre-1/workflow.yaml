@@ -17,18 +17,17 @@
 # ==========================================================================
 staging-settings:
   user-workflow:
-    workflow-name: "cre-1-staging"
+    workflow-name: "safemarket-creation-staging"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.staging.json"
-    secrets-path: ""
-    
+    secrets-path: "../secrets.yaml"
 
 # ==========================================================================
 production-settings:
   user-workflow:
-    workflow-name: "cre-1-production"
+    workflow-name: "safemarket-creation-production"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.production.json"
-    secrets-path: ""
+    secrets-path: "../secrets.yaml"

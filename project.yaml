@@ -26,11 +26,11 @@
 # ==========================================================================
 staging-settings:
   rpcs:
-    - chain-name: base-testnet-sepolia
+    - chain-name: ethereum-testnet-sepolia-base-1
       url: https://base-testnet.core.chainstack.com/e0ef1b32785e0e6be80be5e098474014
 
 # ==========================================================================
 production-settings:
   rpcs:
-    - chain-name: base-testnet-sepolia
+    - chain-name: ethereum-testnet-sepolia-base-1
       url: https://base-testnet.core.chainstack.com/e0ef1b32785e0e6be80be5e098474014
