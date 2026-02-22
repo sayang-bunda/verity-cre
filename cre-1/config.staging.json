@@ -3,5 +3,5 @@
   "chainSelectorName": "ethereum-testnet-sepolia-base-1",
   "gasLimit": "2000000",
   "defaultFeeBps": 200,
-  "geminiModel": "gemini-2.0-flash"
+  "groqModel": "llama-3.3-70b-versatile"
 }

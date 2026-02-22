@@ -41,7 +41,7 @@ const configSchema = z.object({
 	chainSelectorName: z.string(),
 	gasLimit: z.string(),
 	defaultFeeBps: z.number(),
-	geminiModel: z.string(),
+	groqModel: z.string(),
 })
 
 type Config = z.infer<typeof configSchema>
@@ -139,41 +139,40 @@ const callGemini = (runtime: Runtime<Config>, prompt: string): GeminiAnalysis =>
 	const client = new ConfidentialHTTPClient()
 
 	const requestBody = JSON.stringify({
-		contents: [{ parts: [{ text: prompt }] }],
-		generationConfig: {
-			responseMimeType: 'application/json',
-			temperature: 0.1,
-		},
+		model: runtime.config.groqModel,
+		messages: [{ role: 'user', content: prompt }],
+		response_format: { type: 'json_object' },
+		temperature: 0.1,
 	})
 
-	// GEMINI_API_KEY is injected from secrets.yaml env-var mapping via vaultDonSecrets.
-	// Template uses Go-style dot prefix: {{.GEMINI_API_KEY}}
+	// GROQ_API_KEY is injected from secrets.yaml env-var mapping via vaultDonSecrets.
+	// Template uses Go-style dot prefix: {{.GROQ_API_KEY}}
 	const response = client
 		.sendRequest(runtime, {
-			vaultDonSecrets: [{ key: 'GEMINI_API_KEY' }],
+			vaultDonSecrets: [{ key: 'GROQ_API_KEY' }],
 			request: {
-				url: `https://generativelanguage.googleapis.com/v1beta/models/${runtime.config.geminiModel}:generateContent`,
+				url: 'https://api.groq.com/openai/v1/chat/completions',
 				method: 'POST',
 				bodyString: requestBody,
 				multiHeaders: {
 					'Content-Type': { values: ['application/json'] },
-					'x-goog-api-key': { values: ['{{.GEMINI_API_KEY}}'] },
+					Authorization: { values: ['Bearer {{.GROQ_API_KEY}}'] },
 				},
 			},
 		})
 		.result()
 
 	if (response.statusCode !== 200) {
-		throw new Error(`Gemini API error ${response.statusCode}: ${text(response)}`)
+		throw new Error(`Groq API error ${response.statusCode}: ${text(response)}`)
 	}
 
-	const geminiResp = JSON.parse(text(response)) as {
-		candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+	const groqResp = JSON.parse(text(response)) as {
+		choices?: Array<{ message?: { content?: string } }>
 	}
 
-	const rawText = geminiResp.candidates?.[0]?.content?.parts?.[0]?.text
+	const rawText = groqResp.choices?.[0]?.message?.content
 	if (!rawText) {
-		throw new Error('Unexpected Gemini response structure — missing candidates text')
+		throw new Error('Unexpected Groq response structure — missing choices content')
 	}
 
 	return JSON.parse(rawText) as GeminiAnalysis
