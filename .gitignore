@@ -1,4 +1,5 @@
 *.env
+secrets.yaml
 
 node_modules/
 *.wasm
