@@ -9,9 +9,9 @@
 #   account:
 #     workflow-owner-address: "0x123..."            # Optional: Owner wallet/MSIG address (used for --unsigned transactions)
 #   rpcs:
-#     - chain-name: ethereum-testnet-sepolia        # Required if your workflow interacts with this chain
+#     - chain-name: base-testnet-sepolia        # Required if your workflow interacts with this chain
 #       url: "<select your own rpc url>"
-#     - chain-name: ethereum-mainnet                # Required if your workflow interacts with this chain
+#     - chain-name: base-mainnet                # Required if your workflow interacts with this chain
 #       url: "<select your own rpc url>"
 #
 # Experimental chains (automatically used by the simulator when present):
@@ -26,11 +26,11 @@
 # ==========================================================================
 staging-settings:
   rpcs:
-    - chain-name: ethereum-testnet-sepolia
-      url: https://ethereum-sepolia-rpc.publicnode.com
+    - chain-name: base-testnet-sepolia
+      url: https://base-testnet.core.chainstack.com/e0ef1b32785e0e6be80be5e098474014
 
 # ==========================================================================
 production-settings:
   rpcs:
-    - chain-name: ethereum-testnet-sepolia
-      url: https://ethereum-sepolia-rpc.publicnode.com
+    - chain-name: base-testnet-sepolia
+      url: https://base-testnet.core.chainstack.com/e0ef1b32785e0e6be80be5e098474014
