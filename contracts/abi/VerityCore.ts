@@ -89,7 +89,21 @@ export const VerityCore = [
 		stateMutability: 'view',
 		type: 'function',
 	},
-	// ─── Events ────────────────────────────────────────────────────────────────
+	{
+		inputs: [{ internalType: 'uint256', name: 'marketId', type: 'uint256' }],
+		name: 'getMarketQuestion',
+		outputs: [{ internalType: 'string', name: '', type: 'string' }],
+		stateMutability: 'view',
+		type: 'function',
+	},
+	{
+		inputs: [{ internalType: 'uint256', name: 'marketId', type: 'uint256' }],
+		name: 'getBettorCount',
+		outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }],
+		stateMutability: 'view',
+		type: 'function',
+	},
+	// ─── Events ────────────────────────────────────────────────────────────────────
 	{
 		anonymous: false,
 		inputs: [

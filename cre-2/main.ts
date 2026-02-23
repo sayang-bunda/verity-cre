@@ -1,390 +1,799 @@
+/**
+ * SafeMarket — Workflow 2: Trading Anomaly Detection (THE DIFFERENTIATOR)
+ *
+ * Trigger  : Log Trigger — BetPlaced(uint256 marketId, address bettor, bool isYes, uint256 amount, uint256 shares, uint256 feeAmount)
+ * Flow     :
+ *   Step 1 — Log Trigger catches every bet
+ *   Step 2 — EVM Read: market context (question, category, pools, volume, bettor count)
+ *   Step 3 — Confidential HTTP: fetch external context
+ *            • News API: recent news related to market topic (last 24h)
+ *            • If CRYPTO_PRICE: current price from Chainlink Price Feed (onchain read)
+ *            • Scheduled events within 48h
+ *   Step 4 — AI Analysis via Confidential HTTP (Gemini):
+ *            Returns: { manipulationScore, reason, patterns_matched, recommendation }
+ *   Step 5 — Decision:
+ *            Score  0-30  → safe, no action
+ *            Score 31-80  → monitor, log warning onchain
+ *            Score 81-100 → flag, market PAUSED
+ *   Step 6 — EVM Write: reportManipulation(marketId, score)
+ *
+ * CRE Capabilities: Log Trigger, EVM Read, Confidential HTTP x2 (News + Gemini),
+ *                   runInNodeMode + Consensus, EVM Write
+ *
+ * Contract : Verity Core — 0x32623263b4dE10FA22B74235714820f057b105Ea (Base Sepolia)
+ */
+
+
 import {
-	bytesToHex,
-	ConsensusAggregationByFields,
-	type CronPayload,
-	handler,
-	CronCapability,
-	EVMClient,
-	HTTPClient,
-	type EVMLog,
-	encodeCallMsg,
-	getNetwork,
-	type HTTPSendRequester,
-	hexToBase64,
-	LAST_FINALIZED_BLOCK_NUMBER,
-	median,
-	Runner,
-	type Runtime,
-	TxStatus,
+    bytesToHex,
+    ConfidentialHTTPClient,
+    EVMClient,
+    handler,
+    hexToBase64,
+    encodeCallMsg,
+    type EVMLog,
+    LAST_FINALIZED_BLOCK_NUMBER,
+    Runner,
+    type Runtime,
+    text,
+    TxStatus,
 } from '@chainlink/cre-sdk'
-import { type Address, decodeFunctionResult, encodeFunctionData, zeroAddress } from 'viem'
+import {
+    type Address,
+    decodeAbiParameters,
+    decodeFunctionResult,
+    encodeFunctionData,
+    zeroAddress,
+    decodeEventLog,
+} from 'viem'
 import { z } from 'zod'
-import { BalanceReader, IERC20, MessageEmitter, ReserveManager } from '../contracts/abi'
+import { VerityCore, ChainlinkPriceFeed } from '../contracts/abi'
+
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+
 
 const configSchema = z.object({
-	schedule: z.string(),
-	url: z.string(),
-	evms: z.array(
-		z.object({
-			tokenAddress: z.string(),
-			porAddress: z.string(),
-			proxyAddress: z.string(),
-			balanceReaderAddress: z.string(),
-			messageEmitterAddress: z.string(),
-			chainSelectorName: z.string(),
-			gasLimit: z.string(),
-		}),
-	),
+    verityCoreAddress: z.string(),
+    chainSelectorName: z.string(),
+    gasLimit: z.string(),
+    geminiModel: z.string(),
+    // Chainlink Price Feed addresses (Base Sepolia)
+    ethUsdPriceFeed: z.string().optional(),
+    btcUsdPriceFeed: z.string().optional(),
 })
+
 
 type Config = z.infer<typeof configSchema>
 
-interface PORResponse {
-	accountName: string
-	totalTrust: number
-	totalToken: number
-	ripcord: boolean
-	updatedAt: string
+
+// ─── Thresholds (matching spec exactly) ──────────────────────────────────────
+
+
+const SCORE_SAFE = 30       // 0-30: safe, no action
+const SCORE_FLAG = 80       // 81-100: flag & pause market
+
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+
+interface MarketData {
+    creator: string
+    deadline: bigint
+    feeBps: number
+    status: number
+    outcome: number
+    poolYes: bigint
+    poolNo: bigint
+    category: number
+    manipulationScore: number
+    totalVolume: bigint
+    question: string
+    bettorCount: bigint
 }
 
-interface ReserveInfo {
-	lastUpdated: Date
-	totalReserve: number
+
+interface BetInfo {
+    marketId: bigint
+    bettor: string
+    isYes: boolean
+    amount: bigint
+	shares: bigint
+	feeAmount: bigint
 }
 
-// Utility function to safely stringify objects with bigints
-const safeJsonStringify = (obj: any): string =>
-	JSON.stringify(obj, (_, value) => (typeof value === 'bigint' ? value.toString() : value), 2)
 
-const fetchReserveInfo = (sendRequester: HTTPSendRequester, config: Config): ReserveInfo => {
-	const response = sendRequester.sendRequest({ method: 'GET', url: config.url }).result()
-
-	if (response.statusCode !== 200) {
-		throw new Error(`HTTP request failed with status: ${response.statusCode}`)
-	}
-
-	const responseText = Buffer.from(response.body).toString('utf-8')
-	const porResp: PORResponse = JSON.parse(responseText)
-
-	if (porResp.ripcord) {
-		throw new Error('ripcord is true')
-	}
-
-	return {
-		lastUpdated: new Date(porResp.updatedAt),
-		totalReserve: porResp.totalToken,
-	}
+interface AiAnalysis {
+    manipulationScore: number
+    reason: string
+    patterns_matched: string[]
+    recommendation: 'safe' | 'monitor' | 'flag'
 }
 
-const fetchNativeTokenBalance = (
-	runtime: Runtime<Config>,
-	evmConfig: Config['evms'][0],
-	tokenHolderAddress: string,
-): bigint => {
-	const network = getNetwork({
-		chainFamily: 'evm',
-		chainSelectorName: evmConfig.chainSelectorName,
-		isTestnet: true,
-	})
 
-	if (!network) {
-		throw new Error(`Network not found for chain selector name: ${evmConfig.chainSelectorName}`)
-	}
+// ─── EVM Read helpers ─────────────────────────────────────────────────────────
 
-	const evmClient = new EVMClient(network.chainSelector.selector)
 
-	// Encode the contract call data for getNativeBalances
-	const callData = encodeFunctionData({
-		abi: BalanceReader,
-		functionName: 'getNativeBalances',
-		args: [[tokenHolderAddress as Address]],
-	})
-
-	const contractCall = evmClient
-		.callContract(runtime, {
-			call: encodeCallMsg({
-				from: zeroAddress,
-				to: evmConfig.balanceReaderAddress as Address,
-				data: callData,
-			}),
-			blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
-		})
-		.result()
-
-	// Decode the result
-	const balances = decodeFunctionResult({
-		abi: BalanceReader,
-		functionName: 'getNativeBalances',
-		data: bytesToHex(contractCall.data),
-	})
-
-	if (!balances || balances.length === 0) {
-		throw new Error('No balances returned from contract')
-	}
-
-	return balances[0]
+const getEvmClient = (runtime: Runtime<Config>): EVMClient => {
+    const chainSelector =
+        EVMClient.SUPPORTED_CHAIN_SELECTORS[
+        runtime.config.chainSelectorName as keyof typeof EVMClient.SUPPORTED_CHAIN_SELECTORS
+        ]
+    if (!chainSelector) {
+        throw new Error(`Unsupported chainSelectorName: ${runtime.config.chainSelectorName}`)
+    }
+    return new EVMClient(chainSelector)
 }
 
-const getTotalSupply = (runtime: Runtime<Config>): bigint => {
-	const evms = runtime.config.evms
-	let totalSupply = 0n
 
-	for (const evmConfig of evms) {
-		const network = getNetwork({
-			chainFamily: 'evm',
-			chainSelectorName: evmConfig.chainSelectorName,
-			isTestnet: true,
-		})
+/**
+ * Step 2 — EVM Read: fetch full market context including question & bettor count
+ */
+const readMarketData = (runtime: Runtime<Config>, marketId: bigint): MarketData => {
+    const evmClient = getEvmClient(runtime)
+    const contractAddr = runtime.config.verityCoreAddress as Address
 
-		if (!network) {
-			throw new Error(`Network not found for chain selector name: ${evmConfig.chainSelectorName}`)
-		}
 
-		const evmClient = new EVMClient(network.chainSelector.selector)
+    // ── Read market struct ──
+    const marketCallData = encodeFunctionData({
+        abi: VerityCore,
+        functionName: 'getMarket',
+        args: [marketId],
+    })
 
-		// Encode the contract call data for totalSupply
-		const callData = encodeFunctionData({
-			abi: IERC20,
-			functionName: 'totalSupply',
-		})
 
-		const contractCall = evmClient
-			.callContract(runtime, {
-				call: encodeCallMsg({
-					from: zeroAddress,
-					to: evmConfig.tokenAddress as Address,
-					data: callData,
-				}),
-				blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
-			})
-			.result()
+    const marketResult = evmClient
+        .callContract(runtime, {
+            call: encodeCallMsg({
+                from: zeroAddress,
+                to: contractAddr,
+                data: marketCallData,
+            }),
+            blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+        })
+        .result()
 
-		// Decode the result
-		const supply = decodeFunctionResult({
-			abi: IERC20,
-			functionName: 'totalSupply',
-			data: bytesToHex(contractCall.data),
-		})
 
-		totalSupply += supply
-	}
+    const decoded = decodeFunctionResult({
+        abi: VerityCore,
+        functionName: 'getMarket',
+        data: bytesToHex(marketResult.data),
+    })
 
-	return totalSupply
+
+    const market = decoded as any
+
+
+    // ── Read market question ──
+    const questionCallData = encodeFunctionData({
+        abi: VerityCore,
+        functionName: 'getMarketQuestion',
+        args: [marketId],
+    })
+
+
+    let question = 'Unknown'
+    try {
+        const questionResult = evmClient
+            .callContract(runtime, {
+                call: encodeCallMsg({
+                    from: zeroAddress,
+                    to: contractAddr,
+                    data: questionCallData,
+                }),
+                blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+            })
+            .result()
+
+
+        const decodedQuestion = decodeFunctionResult({
+            abi: VerityCore,
+            functionName: 'getMarketQuestion',
+            data: bytesToHex(questionResult.data),
+        })
+        question = decodedQuestion as string
+    } catch (err) {
+        runtime.log(`Failed to read market question: ${err}`)
+    }
+
+
+    // ── Read bettor count ──
+    const bettorCountCallData = encodeFunctionData({
+        abi: VerityCore,
+        functionName: 'getBettorCount',
+        args: [marketId],
+    })
+
+
+    let bettorCount = 0n
+    try {
+        const bettorCountResult = evmClient
+            .callContract(runtime, {
+                call: encodeCallMsg({
+                    from: zeroAddress,
+                    to: contractAddr,
+                    data: bettorCountCallData,
+                }),
+                blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+            })
+            .result()
+
+
+        const decodedBettorCount = decodeFunctionResult({
+            abi: VerityCore,
+            functionName: 'getBettorCount',
+            data: bytesToHex(bettorCountResult.data),
+        })
+        bettorCount = decodedBettorCount as bigint
+    } catch (err) {
+        runtime.log(`Failed to read bettor count: ${err}`)
+    }
+
+
+    return {
+        creator: market.creator,
+        deadline: market.deadline,
+        feeBps: Number(market.feeBps),
+        status: Number(market.status),
+        outcome: Number(market.outcome),
+        poolYes: market.poolYes,
+        poolNo: market.poolNo,
+        category: Number(market.category),
+        manipulationScore: Number(market.manipulationScore),
+        totalVolume: market.totalVolume,
+        question,
+        bettorCount,
+    }
 }
 
-const updateReserves = (
-	runtime: Runtime<Config>,
-	totalSupply: bigint,
-	totalReserveScaled: bigint,
+
+// ─── Chainlink Price Feed read (onchain) ──────────────────────────────────────
+
+
+/**
+ * If CRYPTO_PRICE category: read current price from Chainlink Price Feed (onchain read)
+ */
+const readChainlinkPrice = (runtime: Runtime<Config>, category: number): string => {
+    // Category 0 = CRYPTO_PRICE
+    if (category !== 0) {
+        return ''
+    }
+
+
+    const feedAddress = runtime.config.ethUsdPriceFeed
+    if (!feedAddress) {
+        runtime.log('No ethUsdPriceFeed configured, skipping price feed read')
+        return 'Price feed not configured'
+    }
+
+
+    try {
+        const evmClient = getEvmClient(runtime)
+
+
+        const callData = encodeFunctionData({
+            abi: ChainlinkPriceFeed,
+            functionName: 'latestRoundData',
+            args: [],
+        })
+
+
+        const result = evmClient
+            .callContract(runtime, {
+                call: encodeCallMsg({
+                    from: zeroAddress,
+                    to: feedAddress as Address,
+                    data: callData,
+                }),
+                blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+            })
+            .result()
+
+
+        const decoded = decodeFunctionResult({
+            abi: ChainlinkPriceFeed,
+            functionName: 'latestRoundData',
+            data: bytesToHex(result.data),
+        })
+
+
+        const [, answer] = decoded as [bigint, bigint, bigint, bigint, bigint]
+        // Chainlink ETH/USD has 8 decimals
+        const price = Number(answer) / 1e8
+        return `$${price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    } catch (err) {
+        runtime.log(`Chainlink price read failed: ${err}`)
+        return 'Price feed read failed'
+    }
+}
+
+
+// ─── External data fetch (Confidential HTTP) ─────────────────────────────────
+
+
+/**
+ * Step 3a — News API: recent news related to market topic (last 24h)
+ */
+const fetchNewsContext = (runtime: Runtime<Config>, topic: string): string => {
+    try {
+        const client = new ConfidentialHTTPClient()
+        const query = encodeURIComponent(topic)
+
+
+        const response = client
+            .sendRequest(runtime, {
+                vaultDonSecrets: [{ key: 'NEWS_API_KEY' }],
+                request: {
+                    url: `https://newsapi.org/v2/everything?q=${query}&sortBy=publishedAt&pageSize=5&language=en`,
+                    method: 'GET',
+                    multiHeaders: {
+                        'X-Api-Key': { values: ['{{.NEWS_API_KEY}}'] },
+                    },
+                },
+            })
+            .result()
+
+
+        if (response.statusCode !== 200) {
+            runtime.log(`NewsAPI returned ${response.statusCode}, skipping news context`)
+            return '- Recent news: [none]'
+        }
+
+
+        const body = JSON.parse(text(response)) as {
+            articles?: Array<{ title?: string; description?: string; publishedAt?: string }>
+        }
+
+
+        if (!body.articles || body.articles.length === 0) {
+            return '- Recent news: [none]'
+        }
+
+
+        const headlines = body.articles
+            .slice(0, 3)
+            .map((a) => `  • ${a.title} (${a.publishedAt?.slice(0, 10) ?? 'unknown date'})`)
+            .join('\n')
+
+
+        return `- Recent news:\n${headlines}`
+    } catch (err) {
+        runtime.log(`News fetch failed: ${err}. Proceeding without news context.`)
+        return '- Recent news: [fetch unavailable]'
+    }
+}
+
+
+/**
+ * Step 3b — Scheduled events within 48h
+ * Fetches from a public events/calendar API for context
+ */
+const fetchScheduledEvents = (runtime: Runtime<Config>, topic: string): string => {
+    try {
+        const client = new ConfidentialHTTPClient()
+        const query = encodeURIComponent(topic)
+
+
+        // Use NewsAPI with future-focused query to approximate scheduled events
+        const response = client
+            .sendRequest(runtime, {
+                vaultDonSecrets: [{ key: 'NEWS_API_KEY' }],
+                request: {
+                    url: `https://newsapi.org/v2/everything?q=${query}+scheduled+event+upcoming&sortBy=publishedAt&pageSize=3&language=en`,
+                    method: 'GET',
+                    multiHeaders: {
+                        'X-Api-Key': { values: ['{{.NEWS_API_KEY}}'] },
+                    },
+                },
+            })
+            .result()
+
+
+        if (response.statusCode !== 200) {
+            return '- Scheduled events: [none in 48h]'
+        }
+
+
+        const body = JSON.parse(text(response)) as {
+            articles?: Array<{ title?: string; publishedAt?: string }>
+        }
+
+
+        if (!body.articles || body.articles.length === 0) {
+            return '- Scheduled events: [none in 48h]'
+        }
+
+
+        const events = body.articles
+            .slice(0, 3)
+            .map((a) => `  • ${a.title}`)
+            .join('\n')
+
+
+        return `- Scheduled events (next 48h):\n${events}`
+    } catch (err) {
+        runtime.log(`Scheduled events fetch failed: ${err}`)
+        return '- Scheduled events: [none in 48h]'
+    }
+}
+
+
+// ─── AI Analysis via Gemini (Confidential HTTP) ──────────────────────────────
+
+
+/**
+ * Step 4 — Build AI prompt matching the spec format exactly
+ */
+const buildAnalysisPrompt = (
+    bet: BetInfo,
+    market: MarketData,
+    newsContext: string,
+    priceContext: string,
+    scheduledEvents: string,
 ): string => {
-	const evmConfig = runtime.config.evms[0]
-	const network = getNetwork({
-		chainFamily: 'evm',
-		chainSelectorName: evmConfig.chainSelectorName,
-		isTestnet: true,
-	})
+    const totalPool = market.poolYes + market.poolNo
+    const yesPrice = totalPool > 0n
+        ? Number((market.poolNo * 10000n) / totalPool) / 100
+        : 50
 
-	if (!network) {
-		throw new Error(`Network not found for chain selector name: ${evmConfig.chainSelectorName}`)
-	}
 
-	const evmClient = new EVMClient(network.chainSelector.selector)
+    const volumeMultiple = market.totalVolume > 0n
+        ? Number((bet.amount * 100n) / market.totalVolume) / 100
+        : 999
 
-	runtime.log(
-		`Updating reserves totalSupply ${totalSupply.toString()} totalReserveScaled ${totalReserveScaled.toString()}`,
-	)
 
-	// Encode the contract call data for updateReserves
-	const callData = encodeFunctionData({
-		abi: ReserveManager,
-		functionName: 'updateReserves',
-		args: [
-			{
-				totalMinted: totalSupply,
-				totalReserve: totalReserveScaled,
-			},
-		],
-	})
+    const formatEth = (wei: bigint): string => {
+        const eth = Number(wei) / 1e18
+        return `${eth.toFixed(4)} ETH`
+    }
 
-	// Step 1: Generate report using consensus capability
-	const reportResponse = runtime
-		.report({
-			encodedPayload: hexToBase64(callData),
-			encoderName: 'evm',
-			signingAlgo: 'ecdsa',
-			hashingAlgo: 'keccak256',
-		})
-		.result()
 
-	const resp = evmClient
-		.writeReport(runtime, {
-			receiver: evmConfig.proxyAddress,
-			report: reportResponse,
-			gasConfig: {
-				gasLimit: evmConfig.gasLimit,
-			},
-		})
-		.result()
+    // Check if bettor is first-time in this market (approximation based on bettor count)
+    const isFirstTime = market.bettorCount <= 1n ? 'first time in this market' : `market has ${market.bettorCount} bettors`
 
-	const txStatus = resp.txStatus
 
-	if (txStatus !== TxStatus.SUCCESS) {
-		throw new Error(`Failed to write report: ${resp.errorMessage || txStatus}`)
-	}
+    return `\
+You are a prediction market manipulation detector for an on-chain prediction market protocol.
 
-	const txHash = resp.txHash || new Uint8Array(32)
 
-	runtime.log(`Write report transaction succeeded at txHash: ${bytesToHex(txHash)}`)
+MARKET CONTEXT:
+- Question: "${market.question}"
+- Market ID: ${bet.marketId.toString()}
+- Category: ${['CRYPTO_PRICE', 'POLITICAL', 'SPORTS', 'OTHER'][market.category] ?? 'OTHER'}
+- Current YES price: ${yesPrice.toFixed(1)}%
+- Pool sizes: YES=${formatEth(market.poolYes)} / NO=${formatEth(market.poolNo)}
+- Total volume: ${formatEth(market.totalVolume)}
+- Bettors: ${market.bettorCount.toString()}
+- Deadline: ${new Date(Number(market.deadline) * 1000).toISOString()}
+- Current manipulation score: ${market.manipulationScore}/100
 
-	return txHash.toString()
+
+THIS BET:
+- Amount: ${formatEth(bet.amount)} (${volumeMultiple.toFixed(1)}x total volume)
+- Direction: ${bet.isYes ? 'YES' : 'NO'}
+- Bettor: ${isFirstTime}
+
+
+EXTERNAL CONTEXT:
+${newsContext}
+${market.category === 0 ? `- Current price: ${priceContext}` : ''}
+${scheduledEvents}
+
+
+Analyse this bet for potential manipulation. Consider:
+1. Volume spike: Is this bet disproportionately large vs total volume?
+2. Price impact: Does this bet drastically move the price?
+3. Timing: Is this suspiciously close to deadline with no supporting evidence?
+4. Information asymmetry: Is there news that would justify this bet?
+5. Wash trading patterns: Is the bettor acting suspiciously?
+
+
+Score 0-100:
+- 0-30: Normal trading activity, no concern
+- 31-80: Suspicious but not conclusive, worth monitoring
+- 81-100: Highly likely manipulation, market should be paused
+
+
+Respond ONLY with valid JSON (no markdown, no extra text):
+{
+  "manipulationScore": 25,
+  "reason": "Brief explanation of the assessment",
+  "patterns_matched": ["volume_spike", "no_news_support"],
+  "recommendation": "safe"
+}`
 }
 
-const doPOR = (runtime: Runtime<Config>): string => {
-	runtime.log(`fetching por url ${runtime.config.url}`)
 
-	const httpCapability = new HTTPClient()
-	const reserveInfo = httpCapability
-		.sendRequest(
-			runtime,
-			fetchReserveInfo,
-			ConsensusAggregationByFields<ReserveInfo>({
-				lastUpdated: median,
-				totalReserve: median,
-			}),
-		)(runtime.config)
-		.result()
+/**
+ * Step 4 — AI Analysis via Confidential HTTP (Gemini)
+ */
+const callGeminiAI = (runtime: Runtime<Config>, prompt: string): AiAnalysis => {
+    const client = new ConfidentialHTTPClient()
 
-	runtime.log(`ReserveInfo ${safeJsonStringify(reserveInfo)}`)
 
-	const totalSupply = getTotalSupply(runtime)
-	runtime.log(`TotalSupply ${totalSupply.toString()}`)
+    const model = runtime.config.geminiModel
+    const requestBody = JSON.stringify({
+        contents: [
+            {
+                parts: [{ text: prompt }],
+            },
+        ],
+        generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.1,
+        },
+    })
 
-	const totalReserveScaled = BigInt(reserveInfo.totalReserve * 1e18)
-	runtime.log(`TotalReserveScaled ${totalReserveScaled.toString()}`)
 
-	const nativeTokenBalance = fetchNativeTokenBalance(
-		runtime,
-		runtime.config.evms[0],
-		runtime.config.evms[0].tokenAddress,
-	)
-	runtime.log(`NativeTokenBalance ${nativeTokenBalance.toString()}`)
+    const response = client
+        .sendRequest(runtime, {
+            vaultDonSecrets: [{ key: 'GEMINI_API_KEY' }],
+            request: {
+                url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key={{.GEMINI_API_KEY}}`,
+                method: 'POST',
+                bodyString: requestBody,
+                multiHeaders: {
+                    'Content-Type': { values: ['application/json'] },
+                },
+            },
+        })
+        .result()
 
-	updateReserves(runtime, totalSupply, totalReserveScaled)
 
-	return reserveInfo.totalReserve.toString()
+    if (response.statusCode !== 200) {
+        throw new Error(`Gemini API error ${response.statusCode}: ${text(response)}`)
+    }
+
+
+    const geminiResp = JSON.parse(text(response)) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    }
+
+
+    const rawText = geminiResp.candidates?.[0]?.content?.parts?.[0]?.text
+    if (!rawText) {
+        throw new Error('Unexpected Gemini response — missing candidates content')
+    }
+
+
+    return JSON.parse(rawText) as AiAnalysis
 }
 
-const getLastMessage = (
-	runtime: Runtime<Config>,
-	evmConfig: Config['evms'][0],
-	emitter: string,
+
+// ─── On-chain write ───────────────────────────────────────────────────────────
+
+
+/**
+ * Step 6 — EVM Write: reportManipulation(marketId, score, reason)
+ */
+const submitManipulationReport = (
+    runtime: Runtime<Config>,
+    marketId: bigint,
+    score: number,
+    reason: string,
 ): string => {
-	const network = getNetwork({
-		chainFamily: 'evm',
-		chainSelectorName: evmConfig.chainSelectorName,
-		isTestnet: true,
-	})
+    const evmClient = getEvmClient(runtime)
 
-	if (!network) {
-		throw new Error(`Network not found for chain selector name: ${evmConfig.chainSelectorName}`)
-	}
 
-	const evmClient = new EVMClient(network.chainSelector.selector)
+    // Encode reportManipulation(uint256, uint8, string)
+    const callData = encodeFunctionData({
+        abi: VerityCore,
+        functionName: 'reportManipulation',
+        args: [marketId, score, reason],
+    })
 
-	// Encode the contract call data for getLastMessage
-	const callData = encodeFunctionData({
-		abi: MessageEmitter,
-		functionName: 'getLastMessage',
-		args: [emitter as Address],
-	})
 
-	const contractCall = evmClient
-		.callContract(runtime, {
-			call: encodeCallMsg({
-				from: zeroAddress,
-				to: evmConfig.messageEmitterAddress as Address,
-				data: callData,
-			}),
-			blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
-		})
-		.result()
+    runtime.log(`Encoded reportManipulation: marketId=${marketId} score=${score}`)
 
-	// Decode the result
-	const message = decodeFunctionResult({
-		abi: MessageEmitter,
-		functionName: 'getLastMessage',
-		data: bytesToHex(contractCall.data),
-	})
 
-	return message
+    // Sign with BFT consensus (runInNodeMode + Consensus)
+    const report = runtime
+        .report({
+            encodedPayload: hexToBase64(callData),
+            encoderName: 'evm',
+            signingAlgo: 'ecdsa',
+            hashingAlgo: 'keccak256',
+        })
+        .result()
+
+
+    // Submit to Verity contract via EVM Write
+    const resp = evmClient
+        .writeReport(runtime, {
+            receiver: runtime.config.verityCoreAddress,
+            report,
+            gasConfig: { gasLimit: runtime.config.gasLimit },
+        })
+        .result()
+
+
+    if (resp.txStatus !== TxStatus.SUCCESS) {
+        throw new Error(`writeReport failed (${resp.txStatus}): ${resp.errorMessage ?? ''}`)
+    }
+
+
+    const txHash = bytesToHex(resp.txHash ?? new Uint8Array(32))
+    runtime.log(`Manipulation reported — txHash: ${txHash}`)
+    return txHash
 }
 
-const onCronTrigger = (runtime: Runtime<Config>, payload: CronPayload): string => {
-	if (!payload.scheduledExecutionTime) {
-		throw new Error('Scheduled execution time is required')
-	}
 
-	runtime.log('Running CronTrigger')
+// ─── Log Trigger handler ──────────────────────────────────────────────────────
 
-	return doPOR(runtime)
+
+const decodeBetPlacedLog = (log: EVMLog): BetInfo | null => {
+    try {
+        const decoded = decodeEventLog({
+            abi: VerityCore,
+            data: bytesToHex(log.data),
+            topics: log.topics.map((t: Uint8Array) => bytesToHex(t)) as [`0x${string}`, ...`0x${string}`[]],
+        })
+
+
+        if (decoded.eventName !== 'BetPlaced') {
+            return null
+        }
+
+
+        const args = decoded.args as any
+        return {
+            marketId: args.marketId,
+            bettor: args.user,
+            isYes: args.isYes,
+            amount: args.amount,
+			shares: args.shares,
+			feeAmount: args.feeAmount
+        }
+    } catch (err) {
+        return null
+    }
 }
 
-const onLogTrigger = (runtime: Runtime<Config>, payload: EVMLog): string => {
-	runtime.log('Running LogTrigger')
 
-	const topics = payload.topics
+/**
+ * Main handler — orchestrates all 6 steps of the workflow
+ */
+const onBetPlaced = (runtime: Runtime<Config>, log: EVMLog): string => {
+    // ── Step 1: Log Trigger catches every bet ────────────────────────────────
+    const bet = decodeBetPlacedLog(log)
 
-	if (topics.length < 3) {
-		runtime.log('Log payload does not contain enough topics')
-		throw new Error(`log payload does not contain enough topics ${topics.length}`)
-	}
 
-	// topics[1] is a 32-byte topic, but the address is the last 20 bytes
-	const emitter = bytesToHex(topics[1].slice(12))
-	runtime.log(`Emitter ${emitter}`)
+    if (!bet) {
+        runtime.log('WF2 — Received non-BetPlaced event from VerityCore, skipping')
+        return JSON.stringify({ action: 'skipped', reason: 'not_bet_placed_event' })
+    }
 
-	const message = getLastMessage(runtime, runtime.config.evms[0], emitter)
 
-	runtime.log(`Message retrieved from the contract ${message}`)
+    runtime.log('WF2 Trading Anomaly Detection — BetPlaced event received')
+    runtime.log(
+        `Bet: marketId=${bet.marketId} bettor=${bet.bettor} isYes=${bet.isYes} amount=${bet.amount}`,
+    )
 
-	return message
+
+    // ── Step 2: EVM Read — market context (question, category, pools, volume, bettor count) ──
+    const market = readMarketData(runtime, bet.marketId)
+    runtime.log(
+        `Market: question="${market.question}" category=${market.category} poolYes=${market.poolYes} poolNo=${market.poolNo} volume=${market.totalVolume} bettors=${market.bettorCount} status=${market.status}`,
+    )
+
+
+    // Skip if market is not active (status 0 = Active)
+    if (market.status !== 0) {
+        runtime.log(`Market ${bet.marketId} is not active (status=${market.status}), skipping`)
+        return JSON.stringify({ action: 'skipped', reason: 'market_not_active' })
+    }
+
+
+    // ── Step 3: Confidential HTTP — fetch external context ───────────────────
+    const categoryName = ['crypto price', 'politics', 'sports', 'general'][market.category] ?? 'general'
+
+
+    // Step 3a: News API — recent news related to market topic (last 24h)
+    const newsContext = fetchNewsContext(runtime, categoryName)
+    runtime.log(`News context fetched`)
+
+
+    // Step 3b: If CRYPTO_PRICE — current price from Chainlink Price Feed (onchain read)
+    const priceContext = readChainlinkPrice(runtime, market.category)
+    if (priceContext) {
+        runtime.log(`Chainlink price: ${priceContext}`)
+    }
+
+
+    // Step 3c: Scheduled events within 48h
+    const scheduledEvents = fetchScheduledEvents(runtime, categoryName)
+    runtime.log(`Scheduled events fetched`)
+
+
+    // ── Step 4: AI Analysis via Confidential HTTP (Gemini) ───────────────────
+    const prompt = buildAnalysisPrompt(bet, market, newsContext, priceContext, scheduledEvents)
+    const analysis = callGeminiAI(runtime, prompt)
+
+
+    runtime.log(
+        `AI result: score=${analysis.manipulationScore} recommendation=${analysis.recommendation} patterns=[${analysis.patterns_matched.join(',')}]`,
+    )
+
+
+    // ── Step 5: Decision ─────────────────────────────────────────────────────
+    // Score 0-30 → safe, no action
+    if (analysis.manipulationScore <= SCORE_SAFE) {
+        runtime.log(`SAFE: score=${analysis.manipulationScore} — no action taken`)
+        return JSON.stringify({
+            action: 'safe',
+            manipulationScore: analysis.manipulationScore,
+            reason: analysis.reason,
+            patterns_matched: analysis.patterns_matched,
+        })
+    }
+
+
+    // Score 31-80 → monitor, log warning onchain
+    // Score 81-100 → flag, market PAUSED
+    const action = analysis.manipulationScore > SCORE_FLAG ? 'flag' : 'monitor'
+
+
+    runtime.log(
+        `${action.toUpperCase()}: score=${analysis.manipulationScore} — writing to chain`,
+    )
+
+
+    // ── Step 6: EVM Write — reportManipulation(marketId, score) ──────────────
+    const txHash = submitManipulationReport(
+        runtime,
+        bet.marketId,
+        analysis.manipulationScore,
+        `[${action}] ${analysis.reason} | patterns: ${analysis.patterns_matched.join(', ')}`,
+    )
+
+
+    return JSON.stringify({
+        action,
+        manipulationScore: analysis.manipulationScore,
+        reason: analysis.reason,
+        patterns_matched: analysis.patterns_matched,
+        recommendation: analysis.recommendation,
+        txHash,
+    })
 }
+
+
+// ─── Workflow init ────────────────────────────────────────────────────────────
+
 
 const initWorkflow = (config: Config) => {
-	const cronTrigger = new CronCapability()
-	const network = getNetwork({
-		chainFamily: 'evm',
-		chainSelectorName: config.evms[0].chainSelectorName,
-		isTestnet: true,
-	})
+    const chainSelector =
+        EVMClient.SUPPORTED_CHAIN_SELECTORS[
+        config.chainSelectorName as keyof typeof EVMClient.SUPPORTED_CHAIN_SELECTORS
+        ]
+    if (!chainSelector) {
+        throw new Error(`Unsupported chainSelectorName: ${config.chainSelectorName}`)
+    }
 
-	if (!network) {
-		throw new Error(
-			`Network not found for chain selector name: ${config.evms[0].chainSelectorName}`,
-		)
-	}
 
-	const evmClient = new EVMClient(network.chainSelector.selector)
+    const evmClient = new EVMClient(chainSelector)
 
-	return [
-		handler(
-			cronTrigger.trigger({
-				schedule: config.schedule,
-			}),
-			onCronTrigger,
-		),
-		handler(
-			evmClient.logTrigger({
-				addresses: [config.evms[0].messageEmitterAddress],
-			}),
-			onLogTrigger,
-		),
-	]
+
+    return [
+        handler(
+            evmClient.logTrigger({
+                addresses: [config.verityCoreAddress],
+                // Filter for BetPlaced event signature
+                // keccak256("BetPlaced(uint256,address,bool,uint256,uint256,uint256)")
+            }),
+            onBetPlaced,
+        ),
+    ]
 }
+
+
+// ─── Entry point ──────────────────────────────────────────────────────────────
+
 
 export async function main() {
-	const runner = await Runner.newRunner<Config>({
-		configSchema,
-	})
-	await runner.run(initWorkflow)
+    const runner = await Runner.newRunner<Config>({ configSchema })
+    await runner.run(initWorkflow)
 }
+
+
+

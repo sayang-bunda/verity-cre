@@ -1,4 +1,5 @@
 export * from './BalanceReader'
+export * from './ChainlinkPriceFeed'
 export * from './IERC20'
 export * from './IERC165'
 export * from './IReceiver'
