@@ -28,6 +28,8 @@ staging-settings:
   rpcs:
     - chain-name: ethereum-testnet-sepolia-base-1
       url: https://sepolia.base.org
+    - chain-name: ethereum-mainnet
+      url: https://eth.llamarpc.com
 
 # ==========================================================================
 production-settings:
