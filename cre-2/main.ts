@@ -13,14 +13,14 @@
  *            Returns: { manipulationScore, reason, patterns_matched, recommendation }
  *   Step 5 — Decision:
  *            Score  0-30  → safe, no action
- *            Score 31-80  → monitor, log warning onchain
- *            Score 81-100 → flag, market PAUSED
+ *            Score 31-70  → monitor, log warning onchain
+ *            Score 71-100 → flag, market PAUSED (matches MANIPULATION_THRESHOLD=70 in RiskEngine.sol)
  *   Step 6 — EVM Write: reportManipulation(marketId, score)
  *
  * CRE Capabilities: Log Trigger, EVM Read, Confidential HTTP x2 (News + Groq),
  *                   runInNodeMode + Consensus, EVM Write
  *
- * Contract : Verity Core — 0x32623263b4dE10FA22B74235714820f057b105Ea (Base Sepolia)
+ * Contract : Verity Core — 0x44BA2833fcaAee071CE852DC75caA47538dCd220 (Base Sepolia)
  */
 
 import {
@@ -41,6 +41,7 @@ import {
 	type Address,
 	decodeAbiParameters,
 	decodeFunctionResult,
+	encodeAbiParameters,
 	encodeFunctionData,
 	zeroAddress,
 	decodeEventLog,
@@ -66,7 +67,7 @@ type Config = z.infer<typeof configSchema>
 // ─── Thresholds (matching spec exactly) ──────────────────────────────────────
 
 const SCORE_SAFE = 30       // 0-30: safe, no action
-const SCORE_FLAG = 80       // 81-100: flag & pause market
+const SCORE_FLAG = 70       // 71-100: flag & pause market (matches MANIPULATION_THRESHOLD=70 in RiskEngine.sol)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -376,6 +377,9 @@ const fetchScheduledEvents = (runtime: Runtime<Config>, topic: string): string =
 /**
  * Step 6 — EVM Write: reportManipulation(marketId, score, reason)
  */
+// ACTION_REPORT_MANIPULATION = 2 (matches CREAdapter.sol)
+const ACTION_REPORT_MANIPULATION = 2
+
 const submitManipulationReport = (
 	runtime: Runtime<Config>,
 	marketId: bigint,
@@ -384,19 +388,23 @@ const submitManipulationReport = (
 ): string => {
 	const evmClient = getEvmClient(runtime)
 
-	// Encode reportManipulation(uint256, uint8, string)
-	const callData = encodeFunctionData({
-		abi: VerityCore,
-		functionName: 'reportManipulation',
-		args: [marketId, score, reason],
-	})
+	// Encode as abi.encode(action, ...params) — onReport decoder in CREAdapter expects this format
+	const payload = encodeAbiParameters(
+		[
+			{ type: 'uint8' },    // action = ACTION_REPORT_MANIPULATION
+			{ type: 'uint256' },  // marketId
+			{ type: 'uint8' },    // score
+			{ type: 'string' },   // reason
+		],
+		[ACTION_REPORT_MANIPULATION, marketId, score, reason],
+	)
 
-	runtime.log(`Encoded reportManipulation: marketId=${marketId} score=${score}`)
+	runtime.log(`Encoded ACTION_REPORT_MANIPULATION: marketId=${marketId} score=${score}`)
 
 	// Sign with BFT consensus (runInNodeMode + Consensus)
 	const report = runtime
 		.report({
-			encodedPayload: hexToBase64(callData),
+			encodedPayload: hexToBase64(payload),
 			encoderName: 'evm',
 			signingAlgo: 'ecdsa',
 			hashingAlgo: 'keccak256',

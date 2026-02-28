@@ -24,7 +24,7 @@
  * CRE Capabilities: Log Trigger, EVM Read (market data + Chainlink Price Feed),
  *                   Confidential HTTP (News API + Groq), runInNodeMode + Consensus, EVM Write
  *
- * Contract : Verity Core — 0x32623263b4dE10FA22B74235714820f057b105Ea (Base Sepolia)
+ * Contract : Verity Core — 0x44BA2833fcaAee071CE852DC75caA47538dCd220 (Base Sepolia)
  */
 
 import {
@@ -45,6 +45,7 @@ import {
 	type Address,
 	decodeFunctionResult,
 	decodeEventLog,
+	encodeAbiParameters,
 	encodeFunctionData,
 	zeroAddress,
 } from 'viem'
@@ -480,6 +481,9 @@ const resolveWithAI = (
 
 // ─── Step 5: EVM Write ────────────────────────────────────────────────────────
 
+// ACTION_RESOLVE_MARKET = 3 (matches CREAdapter.sol)
+const ACTION_RESOLVE_MARKET = 3
+
 const submitResolveMarket = (
 	runtime: Runtime<Config>,
 	marketId: bigint,
@@ -488,17 +492,22 @@ const submitResolveMarket = (
 ): string => {
 	const evmClient = getEvmClient(runtime)
 
-	const callData = encodeFunctionData({
-		abi: VerityCore,
-		functionName: 'resolveMarketFromCre',
-		args: [marketId, outcome, confidence],
-	})
+	// Encode as abi.encode(action, ...params) — onReport decoder in CREAdapter expects this format
+	const payload = encodeAbiParameters(
+		[
+			{ type: 'uint8' },    // action = ACTION_RESOLVE_MARKET
+			{ type: 'uint256' },  // marketId
+			{ type: 'uint8' },    // outcome (1=YES, 2=NO)
+			{ type: 'uint8' },    // confidence (0-100)
+		],
+		[ACTION_RESOLVE_MARKET, marketId, outcome, confidence],
+	)
 
-	runtime.log(`Encoding resolveMarketFromCre: marketId=${marketId} outcome=${outcome} confidence=${confidence}`)
+	runtime.log(`Encoded ACTION_RESOLVE_MARKET: marketId=${marketId} outcome=${outcome} confidence=${confidence}`)
 
 	const report = runtime
 		.report({
-			encodedPayload: hexToBase64(callData),
+			encodedPayload: hexToBase64(payload),
 			encoderName: 'evm',
 			signingAlgo: 'ecdsa',
 			hashingAlgo: 'keccak256',
@@ -570,14 +579,15 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 	const threshold = runtime.config.confidenceThreshold ?? 90
 
 	if (result.confidence < threshold) {
-		// Escalate — not confident enough to auto-resolve
+		// Still write to chain with the low confidence value.
+		// SettlementEngine._resolveMarket() checks: if confidence < CONFIDENCE_THRESHOLD (90)
+		// → sets market status to Escalated, enabling claimRefund() for bettors.
 		runtime.log(
-			`ESCALATE: confidence ${result.confidence}% < ${threshold}% threshold — escalating market`,
+			`LOW CONFIDENCE: ${result.confidence}% < ${threshold}% — writing to chain, contract will escalate`,
 		)
 
-		// Write escalation with low confidence score (contract logic handles escalation)
-		// We still call resolveMarketFromCre but with outcome=0 (Unresolved) to trigger escalation path
-		// In practice the contract should have a separate escalate function
+		const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence)
+
 		return JSON.stringify({
 			action: 'escalated',
 			marketId: marketId.toString(),
@@ -585,6 +595,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 			confidence: result.confidence,
 			reason: result.reason,
 			threshold,
+			txHash,
 		})
 	}
 

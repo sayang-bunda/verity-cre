@@ -14,6 +14,10 @@ export type Config = z.infer<typeof configSchema>
 // CryptoPrice = 0, Political = 1, Sports = 2, Other = 3
 export const CATEGORY_MAP: Record<string, number> = {
 	CRYPTO_PRICE: 0,
+	POLITICAL: 1,
+	SPORTS: 2,
+	OTHER: 3,
+	// Legacy aliases kept for backward compat
 	SOCIAL: 3,
 	EVENT: 3,
 }

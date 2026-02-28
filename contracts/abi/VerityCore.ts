@@ -1,10 +1,9 @@
 // ABI for Verity Core contract (CRE-facing functions)
-// Contract address (Base Sepolia): 0x32623263b4dE10FA22B74235714820f057b105Ea
+// Contract address (Base Sepolia): 0x44BA2833fcaAee071CE852DC75caA47538dCd220
 //
-// NOTE: The Verity contract must implement the IReceiver interface (onReport)
-// to accept CRE writeReport calls. The onReport handler should decode the
-// payload and route to the appropriate internal function (_createMarket,
-// _reportManipulation, _resolveMarket) based on the function selector.
+// NOTE: CRE writeReport calls onReport(bytes metadata, bytes report) on the contract.
+// The `report` payload must be abi.encode(uint8 action, ...params) — NOT encodeFunctionData.
+// Action routing: ACTION_CREATE_MARKET=1, ACTION_REPORT_MANIPULATION=2, ACTION_RESOLVE_MARKET=3
 
 
 export const VerityCore = [
@@ -18,6 +17,8 @@ export const VerityCore = [
             { internalType: 'string', name: 'question', type: 'string' },
             { internalType: 'string', name: 'resolutionCriteria', type: 'string' },
             { internalType: 'string', name: 'dataSources', type: 'string' },
+            { internalType: 'int256', name: 'targetValue', type: 'int256' },
+            { internalType: 'address', name: 'priceFeedAddress', type: 'address' },
         ],
         name: 'createMarketFromCre',
         outputs: [{ internalType: 'uint256', name: 'marketId', type: 'uint256' }],
