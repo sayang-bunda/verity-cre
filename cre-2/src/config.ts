@@ -4,7 +4,7 @@ export const configSchema = z.object({
     verityCoreAddress: z.string(),
     chainSelectorName: z.string(),
     gasLimit: z.string(),
-    geminiModel: z.string(),
+    groqModel: z.string(),
     // Chainlink Price Feed addresses (Base Sepolia)
     ethUsdPriceFeed: z.string().optional(),
     btcUsdPriceFeed: z.string().optional(),

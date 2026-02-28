@@ -2,7 +2,7 @@
   "verityCoreAddress": "0x32623263b4dE10FA22B74235714820f057b105Ea",
   "chainSelectorName": "ethereum-testnet-sepolia-base-1",
   "gasLimit": "2000000",
-  "geminiModel": "gemini-2.0-flash",
+  "groqModel": "llama-3.3-70b-versatile",
   "ethUsdPriceFeed": "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1",
   "btcUsdPriceFeed": "0x0FB99723Aee6f420beAD13e6bBB79b7E6F034298"
 }

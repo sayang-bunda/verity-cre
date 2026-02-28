@@ -2,11 +2,9 @@ import { ConfidentialHTTPClient, text, type Runtime } from '@chainlink/cre-sdk'
 import type { Config } from './config'
 import type { AiAnalysis, BetInfo, MarketData } from './types'
 
-
 const CATEGORY_NAMES = ['CRYPTO_PRICE', 'POLITICAL', 'SPORTS', 'OTHER'] as const
 
 const formatEth = (wei: bigint): string => `${(Number(wei) / 1e18).toFixed(4)} ETH`
-
 
 /**
  * Step 4 — Build AI prompt for manipulation detection
@@ -31,9 +29,7 @@ export const buildAnalysisPrompt = (
         ? 'first time in this market'
         : `market has ${market.bettorCount} bettors`
 
-    return `\
-You are a prediction market manipulation detector for an on-chain prediction market protocol.
-
+    return `You are a prediction market manipulation detector for an on-chain prediction market protocol.
 
 MARKET CONTEXT:
 - Question: "${market.question}"
@@ -46,18 +42,15 @@ MARKET CONTEXT:
 - Deadline: ${new Date(Number(market.deadline) * 1000).toISOString()}
 - Current manipulation score: ${market.manipulationScore}/100
 
-
 THIS BET:
 - Amount: ${formatEth(bet.amount)} (${volumeMultiple.toFixed(1)}x total volume)
 - Direction: ${bet.isYes ? 'YES' : 'NO'}
 - Bettor: ${bettorContext}
 
-
 EXTERNAL CONTEXT:
 ${newsContext}
 ${market.category === 0 ? `- Current price: ${priceContext}` : ''}
 ${scheduledEvents}
-
 
 Analyse this bet for potential manipulation. Consider:
 1. Volume spike: Is this bet disproportionately large vs total volume?
@@ -66,12 +59,10 @@ Analyse this bet for potential manipulation. Consider:
 4. Information asymmetry: Is there news that would justify this bet?
 5. Wash trading patterns: Is the bettor acting suspiciously?
 
-
 Score 0-100:
 - 0-30: Normal trading activity, no concern
 - 31-80: Suspicious but not conclusive, worth monitoring
 - 81-100: Highly likely manipulation, market should be paused
-
 
 Respond ONLY with valid JSON (no markdown, no extra text):
 {
@@ -82,45 +73,52 @@ Respond ONLY with valid JSON (no markdown, no extra text):
 }`
 }
 
-
 /**
- * Step 4 — AI Analysis via Confidential HTTP (Gemini)
+ * Step 4 — AI Analysis via Confidential HTTP (Groq)
+ * Groq uses OpenAI-compatible API format
  */
-export const callGeminiAI = (runtime: Runtime<Config>, prompt: string): AiAnalysis => {
+export const callGroqAI = (runtime: Runtime<Config>, prompt: string): AiAnalysis => {
     const client = new ConfidentialHTTPClient()
 
     const requestBody = JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1,
-        },
+        model: runtime.config.groqModel,
+        messages: [
+            {
+                role: 'user',
+                content: prompt,
+            },
+        ],
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
     })
 
     const response = client
         .sendRequest(runtime, {
-            vaultDonSecrets: [{ key: 'GEMINI_API_KEY' }],
+            vaultDonSecrets: [{ key: 'GROQ_API_KEY' }],
             request: {
-                url: `https://generativelanguage.googleapis.com/v1beta/models/${runtime.config.geminiModel}:generateContent?key={{.GEMINI_API_KEY}}`,
+                url: 'https://api.groq.com/openai/v1/chat/completions',
                 method: 'POST',
                 bodyString: requestBody,
-                multiHeaders: { 'Content-Type': { values: ['application/json'] } },
+                multiHeaders: {
+                    'Content-Type': { values: ['application/json'] },
+                    'Authorization': { values: ['Bearer {{.GROQ_API_KEY}}'] },
+                },
             },
         })
         .result()
 
     if (response.statusCode !== 200) {
-        throw new Error(`Gemini API error ${response.statusCode}: ${text(response)}`)
+        throw new Error(`Groq API error ${response.statusCode}: ${text(response)}`)
     }
 
-    const geminiResp = JSON.parse(text(response)) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    const groqResp = JSON.parse(text(response)) as {
+        choices?: Array<{ message?: { content?: string } }>
     }
 
-    const rawText = geminiResp.candidates?.[0]?.content?.parts?.[0]?.text
-    if (!rawText) {
-        throw new Error('Unexpected Gemini response — missing candidates content')
+    const rawContent = groqResp.choices?.[0]?.message?.content
+    if (!rawContent) {
+        throw new Error('Groq response missing choices[0].message.content')
     }
 
-    return JSON.parse(rawText) as AiAnalysis
+    return JSON.parse(rawContent) as AiAnalysis
 }
