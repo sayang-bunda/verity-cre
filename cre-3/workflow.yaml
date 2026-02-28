@@ -1,34 +1,31 @@
 # ==========================================================================
-# CRE WORKFLOW SETTINGS FILE
+# CRE WORKFLOW SETTINGS FILE — CRE-3: Smart Resolution
 # ==========================================================================
-# Workflow-specific settings for CRE CLI targets.
-# Each target defines user-workflow and workflow-artifacts groups.
-# Settings here override CRE Project Settings File values.
-#
-# Example custom target:
-# my-target:
-#   user-workflow:
-#     workflow-name: "MyExampleWorkflow"    # Required: Workflow Registry name
-#   workflow-artifacts:
-#     workflow-path: "./main.ts"            # Path to workflow entry point
-#     config-path: "./config.yaml"          # Path to config file
-#     secrets-path: "../secrets.yaml"       # Path to secrets file (project root by default)
+# Workflow 3: SmartResolve — Category-based automatic market resolution.
+# Trigger  : Log Trigger — SettlementRequested(uint256 marketId, uint8 category)
+# Branch   :
+#   CRYPTO_PRICE (0) → deterministic: Chainlink Price Feed → outcome + confidence=100
+#   SOCIAL      (1) → AI-powered: NewsAPI context + Gemini → outcome + confidence
+#   EVENT       (2) → AI-powered: multi-source NewsAPI + Gemini → outcome + confidence
+# Actions  : EVM Read (getMarket + getMarketResolutionData + Chainlink Price Feed),
+#            Confidential HTTP (NewsAPI + Gemini), Consensus,
+#            EVM Write (resolveMarketFromCre) if confidence >= 90
 
 # ==========================================================================
 staging-settings:
   user-workflow:
-    workflow-name: "cre-3-staging"
+    workflow-name: "cre-3-smartresolve-staging"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.staging.json"
-    secrets-path: ""
-    
+    secrets-path: "../secrets.yaml"
+
 
 # ==========================================================================
 production-settings:
   user-workflow:
-    workflow-name: "cre-3-production"
+    workflow-name: "cre-3-smartresolve-production"
   workflow-artifacts:
     workflow-path: "./main.ts"
     config-path: "./config.production.json"
-    secrets-path: ""
+    secrets-path: "../secrets.yaml"
