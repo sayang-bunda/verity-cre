@@ -69,8 +69,8 @@ type Config = z.infer<typeof configSchema>
 
 // MarketCategory (matches DataTypes.sol)
 const CATEGORY_CRYPTO = 0
-const CATEGORY_POLITICAL = 1
-const CATEGORY_SPORTS = 2
+const CATEGORY_EVENT = 1
+const CATEGORY_SOCIAL = 2
 const CATEGORY_OTHER = 3
 
 // MarketOutcome (matches DataTypes.sol)
@@ -310,7 +310,7 @@ const buildResolutionPrompt = (
 	dataSources: string,
 	externalContext: string,
 ): string => {
-	const categoryLabel = ['CRYPTO_PRICE', 'POLITICAL', 'SPORTS', 'OTHER'][category] ?? 'OTHER'
+	const categoryLabel = ['CRYPTO', 'EVENT', 'SOCIAL', 'OTHER'][category] ?? 'OTHER'
 
 	return `\
 You are a prediction market resolution expert.
@@ -447,10 +447,10 @@ const resolveWithAI = (
 	resolution: ResolutionData,
 ): ResolutionResult => {
 	// Determine search query based on category
-	const newsQuery = category === CATEGORY_POLITICAL
-		? `politics election ${market.question.slice(0, 80)}`
-		: category === CATEGORY_SPORTS
-			? `sports ${market.question.slice(0, 80)}`
+	const newsQuery = category === CATEGORY_EVENT
+		? `event news ${market.question.slice(0, 80)}`
+		: category === CATEGORY_SOCIAL
+			? `social viral trending ${market.question.slice(0, 80)}`
 			: market.question.slice(0, 100)
 
 	// Fetch news evidence
@@ -565,8 +565,8 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 		runtime.log('Branch: CRYPTO_PRICE — reading Chainlink Price Feed (deterministic)')
 		result = resolveCryptoPrice(runtime, resolution)
 	} else {
-		// Category 1/2/3: SOCIAL / POLITICAL / EVENT — AI-powered via Groq
-		const label = ['CRYPTO_PRICE', 'POLITICAL', 'SPORTS', 'OTHER'][market.category] ?? 'OTHER'
+		// Category 1/2/3: EVENT / SOCIAL / OTHER — AI-powered via Groq
+		const label = ['CRYPTO', 'EVENT', 'SOCIAL', 'OTHER'][market.category] ?? 'OTHER'
 		runtime.log(`Branch: ${label} — calling Groq AI for resolution`)
 		result = resolveWithAI(runtime, market.category, market, resolution)
 	}

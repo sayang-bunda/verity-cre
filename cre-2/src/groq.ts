@@ -2,7 +2,7 @@ import { ConfidentialHTTPClient, text, type Runtime } from '@chainlink/cre-sdk'
 import type { Config } from './config'
 import type { AiAnalysis, BetInfo, MarketData } from './types'
 
-const CATEGORY_NAMES = ['CRYPTO_PRICE', 'POLITICAL', 'SPORTS', 'OTHER'] as const
+const CATEGORY_NAMES = ['CRYPTO', 'EVENT', 'SOCIAL', 'OTHER'] as const
 
 const formatEth = (wei: bigint): string => `${(Number(wei) / 1e18).toFixed(4)} ETH`
 

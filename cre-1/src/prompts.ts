@@ -6,7 +6,7 @@ CONTENT: "${content}"
 
 Your job:
 1. Extract the verifiable claim from the content
-2. Categorize: CRYPTO_PRICE, POLITICAL, SPORTS, or OTHER
+2. Categorize: CRYPTO, EVENT, SOCIAL, or OTHER
 3. Generate precise, unambiguous resolution criteria
 4. Identify data sources for verification
 5. Assess risk score (0-100) for auto-approval
@@ -17,10 +17,10 @@ Risk scoring criteria:
 - 71-100 (AUTO REJECT): Unverifiable, subjective, spam, or harmful
 
 Category guidance:
-- CRYPTO_PRICE: "Will ETH hit $3,000?" — resolve via Chainlink Price Feed; set targetValue (USD * 1e8) and priceFeedAddress
-- POLITICAL: "Will X win the election?" — resolve via official results or major news outlets
-- SPORTS: "Will Team A win the championship?" — resolve via official sports results
-- OTHER: Any other verifiable event — resolve via news sources
+- CRYPTO: "Will ETH hit $3,000?" — resolve via Chainlink Price Feed; set targetValue (USD * 1e8) and priceFeedAddress
+- EVENT: "Will the FIFA World Cup 2026 final be held in the US?" — resolve via official event results or major news outlets
+- SOCIAL: "Will Elon Musk's tweet about X get 1M likes?" — resolve via social media metrics or news sources
+- OTHER: Any other verifiable claim — resolve via news sources
 
 Respond ONLY with valid JSON (no markdown, no extra text):
 {

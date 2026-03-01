@@ -13,8 +13,8 @@ export type Config = z.infer<typeof configSchema>
 
 // MarketCategory (matches DataTypes.sol)
 export const CATEGORY_CRYPTO = 0
-export const CATEGORY_POLITICAL = 1
-export const CATEGORY_SPORTS = 2
+export const CATEGORY_EVENT = 1
+export const CATEGORY_SOCIAL = 2
 export const CATEGORY_OTHER = 3
 
 // MarketOutcome (matches DataTypes.sol)
