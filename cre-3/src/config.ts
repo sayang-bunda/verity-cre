@@ -4,7 +4,7 @@ export const configSchema = z.object({
     verityCoreAddress: z.string(),
     chainSelectorName: z.string(),
     gasLimit: z.string(),
-    geminiModel: z.string(),
+    groqModel: z.string(),
     confidenceThreshold: z.number().default(90),
     ethUsdPriceFeed: z.string().optional(),
 })

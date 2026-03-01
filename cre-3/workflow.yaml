@@ -5,10 +5,10 @@
 # Trigger  : Log Trigger — SettlementRequested(uint256 marketId, uint8 category)
 # Branch   :
 #   CRYPTO_PRICE (0) → deterministic: Chainlink Price Feed → outcome + confidence=100
-#   SOCIAL      (1) → AI-powered: NewsAPI context + Gemini → outcome + confidence
-#   EVENT       (2) → AI-powered: multi-source NewsAPI + Gemini → outcome + confidence
+#   SOCIAL      (1) → AI-powered: NewsAPI context + Groq → outcome + confidence
+#   EVENT       (2) → AI-powered: multi-source NewsAPI + Groq → outcome + confidence
 # Actions  : EVM Read (getMarket + getMarketResolutionData + Chainlink Price Feed),
-#            Confidential HTTP (NewsAPI + Gemini), Consensus,
+#            Confidential HTTP (NewsAPI + Groq), Consensus,
 #            EVM Write (resolveMarketFromCre) if confidence >= 90
 
 # ==========================================================================
