@@ -2,11 +2,11 @@
  * CRE-1 LOCAL SIMULATOR (updated to mirror latest git pull)
  * ==========================================================
  * Mirrors EXACTLY:
- *   - cre-1/src/prompts.ts  (categories: CRYPTO_PRICE, POLITICAL, SPORTS, OTHER)
- *   - cre-1/src/groq.ts     (ConfidentialHTTPClient → direct HTTPS here)
- *   - cre-1/src/market.ts   (ACTION_CREATE_MARKET=1, all new ABI fields)
+ *   - cre-1/src/prompts.ts  (categories: CRYPTO, EVENT, SOCIAL, OTHER)
+ *   - cre-1/src/groq.ts     (temperature=0, seed=42 for BFT determinism)
+ *   - cre-1/src/market.ts   (ACTION_CREATE_MARKET=1, all ABI fields)
  *   - cre-1/src/config.ts   (RISK_AUTO_APPROVE=30, RISK_AUTO_REJECT=70)
- *   - cre-1/main.ts         (decision logic flow)
+ *   - cre-1/main.ts         (LOW auto-approve, MEDIUM BFT 21-node, HIGH reject)
  *
  * Run: node cre-simulator.js
  * POST http://localhost:3001/trigger
@@ -18,7 +18,7 @@ import https from 'https'
 // ─── Config (mirrors cre-1/config.staging.json + config.ts) ──────────────────
 
 const CONFIG = {
-    verityCoreAddress: '0x32623263b4dE10FA22B74235714820f057b105Ea',
+    verityCoreAddress: '0xEF5Fb431494da36f0459Dc167Faf7D23ad50A869',
     chainSelectorName: 'ethereum-testnet-sepolia-base-1',
     gasLimit: '2000000',
     defaultFeeBps: 200,
@@ -30,12 +30,10 @@ const CONFIG = {
 // mirrors cre-1/src/config.ts CATEGORY_MAP exactly
 const CATEGORY_MAP = {
     CRYPTO_PRICE: 0,
-    POLITICAL: 1,
-    SPORTS: 2,
+    CRYPTO: 0,
+    EVENT: 1,
+    SOCIAL: 2,
     OTHER: 3,
-    // Legacy aliases
-    SOCIAL: 3,
-    EVENT: 3,
 }
 
 // ─── Runtime logger (mirrors CRE DON node runtime.log) ───────────────────────
@@ -110,7 +108,8 @@ async function callGroq(runtime, prompt) {
             model: CONFIG.groqModel,
             messages: [{ role: 'user', content: prompt }],
             response_format: { type: 'json_object' },
-            temperature: 0.1,
+            temperature: 0,    // Must be 0 for BFT consensus determinism
+            seed: 42,          // Fixed seed — all 21 nodes produce identical output
         })
 
         const req = https.request({
@@ -167,15 +166,16 @@ function simulateAI(prompt) {
         lower.includes('link')) {
         category = 'CRYPTO_PRICE'
         riskScore = Math.floor(Math.random() * 15) + 5  // 5-20, LOW risk
-    } else if (lower.includes('elect') || lower.includes('vote') || lower.includes('president') ||
-        lower.includes('politi') || lower.includes('candidate') || lower.includes('congress')) {
-        category = 'POLITICAL'
-        riskScore = Math.floor(Math.random() * 25) + 35  // 35-60 PENDING
-    } else if (lower.includes('championship') || lower.includes('league') || lower.includes('world cup') ||
-        lower.includes('nba') || lower.includes('nfl') || lower.includes('premier') ||
-        (lower.includes('win') && (lower.includes('team') || lower.includes('match')))) {
-        category = 'SPORTS'
-        riskScore = Math.floor(Math.random() * 20) + 10  // 10-30 AUTO APPROVE
+    } else if (lower.includes('event') || lower.includes('elect') || lower.includes('launch') ||
+        lower.includes('summit') || lower.includes('conference') || lower.includes('world cup') ||
+        lower.includes('championship') || lower.includes('final')) {
+        category = 'EVENT'
+        riskScore = Math.floor(Math.random() * 25) + 35  // 35-60 MEDIUM → BFT
+    } else if (lower.includes('tweet') || lower.includes('post') || lower.includes('viral') ||
+        lower.includes('social') || lower.includes('likes') || lower.includes('followers') ||
+        lower.includes('retweet') || lower.includes('elon') || lower.includes('influencer')) {
+        category = 'SOCIAL'
+        riskScore = Math.floor(Math.random() * 25) + 35  // 35-60 MEDIUM → BFT
     }
 
     // High-risk keywords → AUTO REJECT
@@ -196,22 +196,30 @@ function simulateAI(prompt) {
             resolutionCriteria: 'Resolves YES if the spot price on Chainlink Price Feed exceeds the target at any point before deadline. Resolves NO otherwise.',
             dataSources: ['chainlink.com/price-feeds', 'coinmarketcap.com', 'coingecko.com'],
             riskReason: 'Crypto price markets are verifiable via Chainlink Price Feeds on-chain.',
-            targetValue: 100000,           // example: $100k
-            priceFeedAddress: '0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb',  // BTC/USD Base Sepolia
+            targetValue: 100000,
+            priceFeedAddress: '0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb',
         },
-        POLITICAL: {
-            refinedQuestion: 'Will the specified political outcome occur before the deadline?',
-            resolutionCriteria: 'Resolves YES based on official government or electoral body announcements confirmed by 3+ major news sources.',
-            dataSources: ['reuters.com', 'apnews.com', 'bbc.com'],
-            riskReason: 'Political markets require careful multi-source verification.',
+        CRYPTO: {
+            refinedQuestion: 'Will the specified cryptocurrency asset reach the target price before the deadline?',
+            resolutionCriteria: 'Resolves YES if the spot price on Chainlink Price Feed exceeds the target at any point before deadline. Resolves NO otherwise.',
+            dataSources: ['chainlink.com/price-feeds', 'coinmarketcap.com', 'coingecko.com'],
+            riskReason: 'Crypto price markets are verifiable via Chainlink Price Feeds on-chain.',
+            targetValue: 100000,
+            priceFeedAddress: '0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb',
+        },
+        EVENT: {
+            refinedQuestion: 'Will the specified event occur before the stated deadline?',
+            resolutionCriteria: 'Resolves YES if confirmed by official sources or 3+ major reputable news outlets before the deadline.',
+            dataSources: ['reuters.com', 'bbc.com', 'apnews.com'],
+            riskReason: 'Event markets require multi-source news verification — routed via BFT consensus.',
             targetValue: null,
             priceFeedAddress: null,
         },
-        SPORTS: {
-            refinedQuestion: 'Will the specified sports outcome occur before the deadline?',
-            resolutionCriteria: 'Resolves YES if the specified team or player achieves the stated outcome per official league results.',
-            dataSources: ['espn.com', 'bbc.com/sport', 'officialleague.com'],
-            riskReason: 'Sports outcomes are verifiable via official league results.',
+        SOCIAL: {
+            refinedQuestion: 'Will the specified social media metric or viral event occur before the deadline?',
+            resolutionCriteria: 'Resolves YES if confirmed by the official platform metrics or 3+ major news sources before the deadline.',
+            dataSources: ['twitter.com', 'reuters.com', 'newsapi.org'],
+            riskReason: 'Social markets are harder to verify objectively — routed via BFT consensus.',
             targetValue: null,
             priceFeedAddress: null,
         },
@@ -268,6 +276,7 @@ function simulateOnChainWrite(runtime, creator, analysis) {
     runtime.log(`  priceFeedAddr  : ${priceFeedAddress}`)
 
     // Mirrors: runtime.report({ encodedPayload: hexToBase64(payload), ... })
+    // BFT: all 21 DON nodes produce this same payload (temperature=0, seed=42)
     const payloadObj = {
         action: ACTION_CREATE_MARKET,
         creator,
@@ -284,7 +293,7 @@ function simulateOnChainWrite(runtime, creator, analysis) {
     runtime.log(`Payload base64 (first 60): ${encodedPayload.slice(0, 60)}...`)
 
     // Mirrors: evmClient.writeReport → receiver=verityCoreAddress
-    runtime.log('Simulating BFT consensus (12 DON nodes signing)...')
+    runtime.log('Simulating BFT consensus (21 DON nodes signing, ≥13 required)...')
     runtime.log(`Submitting writeReport → receiver: ${CONFIG.verityCoreAddress}`)
 
     const txHash = '0x' + Array.from(
@@ -326,6 +335,18 @@ async function onHTTPTrigger(input, runtime) {
     const prompt = buildPrompt(input.inputType, content)
     const analysis = await callGroq(runtime, prompt)
 
+    // ── [SIMULATOR ONLY] Force risk score for BFT testing ────────────────────
+    if (input.__forceRiskScore !== undefined) {
+        const forced = Number(input.__forceRiskScore)
+        runtime.log(`⚠️  [TEST MODE] Overriding riskScore: ${analysis.riskScore} → ${forced}`)
+        analysis.riskScore = forced
+    }
+    if (input.__forceCategory !== undefined) {
+        runtime.log(`⚠️  [TEST MODE] Overriding category: ${analysis.category} → ${input.__forceCategory}`)
+        analysis.category = input.__forceCategory
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     runtime.log(
         `Groq result: resolvable=${analysis.resolvable} category=${analysis.category} riskScore=${analysis.riskScore}`
     )
@@ -344,8 +365,15 @@ async function onHTTPTrigger(input, runtime) {
     }
 
     if (analysis.riskScore > CONFIG.RISK_AUTO_APPROVE) {
+        // MEDIUM risk (31-70): BFT 21-node consensus
+        // All 21 DON nodes independently evaluate → if ≥13 agree → on-chain
+        runtime.log(
+            `MEDIUM risk: score=${analysis.riskScore} — submitting for BFT 21-node consensus`
+        )
+        const txHash = simulateOnChainWrite(runtime, input.creator, analysis)
         const result = {
-            status: 'pending',
+            status: 'created',
+            txHash,
             marketCategory: analysis.category,
             refinedQuestion: analysis.refinedQuestion,
             resolutionCriteria: analysis.resolutionCriteria,
@@ -353,13 +381,18 @@ async function onHTTPTrigger(input, runtime) {
             riskScore: analysis.riskScore,
             riskReason: analysis.riskReason,
             suggestedDeadline: analysis.suggestedDeadline,
+            bftConsensus: {
+                required: 13,
+                total: 21,
+                note: 'Market created via BFT 21-node consensus (simulated)',
+            },
         }
-        runtime.log(`Pending review: score=${analysis.riskScore}`)
+        runtime.log(`MEDIUM risk resolved via BFT — txHash: ${txHash}`)
         return result
     }
 
-    // Step 3: Auto approve → simulate on-chain write
-    runtime.log(`Auto-approving: score=${analysis.riskScore}`)
+    // LOW risk (0-30): Auto approve → simulate on-chain write
+    runtime.log(`LOW risk auto-approving: score=${analysis.riskScore}`)
     const txHash = simulateOnChainWrite(runtime, input.creator, analysis)
 
     return {
@@ -427,9 +460,9 @@ const server = http.createServer(async (req, res) => {
                     _simulator: {
                         requestId,
                         workflow: 'safemarket-creation-staging',
-                        nodeCount: 12,
-                        consensusType: 'BFT',
-                        donId: 'DON-SIMULATED',
+                        nodeCount: 21,
+                        consensusType: 'BFT (OCR3)',
+                        minSigners: 13,
                         logs: runtime.getLogs(),
                     },
                 }
@@ -460,7 +493,7 @@ const server = http.createServer(async (req, res) => {
         <p>Contract: <code>${CONFIG.verityCoreAddress}</code></p>
         <p>Chain: <code>${CONFIG.chainSelectorName}</code></p>
         <p>Mode: <b>${process.env.GROQ_API_KEY ? '🤖 Groq AI Live (llama-3.3-70b)' : '🔬 Simulation (no API key)'}</b></p>
-        <p>Categories: <b>CRYPTO_PRICE | POLITICAL | SPORTS | OTHER</b></p>
+        <p>Categories: <b>CRYPTO | EVENT | SOCIAL | OTHER</b></p>
         <p>ABI fields: <b>action, creator, deadline, feeBps, category, question, resolutionCriteria, dataSources, targetValue, priceFeedAddress</b></p>
         <hr/>
         <h2>Endpoints</h2>
@@ -489,7 +522,8 @@ server.listen(PORT, () => {
     console.log(`🔍 Health    : http://localhost:${PORT}/health`)
     console.log(`📋 Contract  : ${CONFIG.verityCoreAddress}`)
     console.log(`⛓️  Chain     : ${CONFIG.chainSelectorName}`)
-    console.log(`📁 Categories: CRYPTO_PRICE | POLITICAL | SPORTS | OTHER`)
+    console.log(`📁 Categories: CRYPTO | EVENT | SOCIAL | OTHER`)
+    console.log(`⚖️  BFT       : 21 nodes, ≥13 required for consensus`)
     console.log(`🤖 Mode      : ${process.env.GROQ_API_KEY ? 'Groq AI Live (llama-3.3-70b)' : 'Simulation (no API key)'}`)
     console.log('====================================================')
     console.log('Waiting for requests...\n')

@@ -4,14 +4,17 @@
  * Trigger  : HTTP Trigger (POST from frontend)
  * Steps    :
  *   1. Decode incoming JSON payload (manual question OR tweet text)
- *   2. Call Groq via Confidential HTTP to analyse, categorise, and risk-score
+ *   2. Call Groq via Confidential HTTP (temperature=0, seed=42) to analyse,
+ *      categorise, and risk-score
  *   3. Decision:
- *        riskScore  0-30  → AUTO APPROVE  → createMarketFromCre() on-chain
- *        riskScore 31-70  → PENDING       → return pending (admin reviews)
- *        riskScore 71-100 → AUTO REJECT   → return rejection reason
- *   4. On approval: encode calldata, sign with BFT consensus, writeReport to Verity
+ *        riskScore  0-30  → LOW    → AUTO APPROVE  → createMarketFromCre() on-chain
+ *        riskScore 31-70  → MEDIUM → BFT CONSENSUS → 21 DON nodes verify
+ *                                                     ≥13 agree → on-chain
+ *                                                     <13 agree → no action
+ *        riskScore 71-100 → HIGH   → AUTO REJECT   → return rejection reason
+ *   4. On LOW/MEDIUM: BFT signs with 21 nodes, writeReport to Verity
  *
- * Contract : Verity Core — 0x32623263b4dE10FA22B74235714820f057b105Ea (Base Sepolia)
+ * Contract : Verity Core — 0xEF5Fb431494da36f0459Dc167Faf7D23ad50A869 (Base Sepolia)
  */
 
 import { handler, HTTPCapability, type HTTPPayload, Runner, type Runtime } from '@chainlink/cre-sdk'
@@ -80,8 +83,19 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
 	}
 
 	if (analysis.riskScore > RISK_AUTO_APPROVE) {
+		// ── Step 3: MEDIUM risk (31-70) → BFT 21-node consensus ─────────────
+		// All 21 DON nodes independently run Groq (temperature=0, seed=42)
+		// and must produce identical payload. BFT requires ≥13/21 nodes to
+		// agree before writeReport is submitted on-chain.
+		runtime.log(
+			`MEDIUM risk: score=${analysis.riskScore} — submitting for BFT 21-node consensus`,
+		)
+
+		const txHash = submitCreateMarket(runtime, input.creator, analysis)
+
 		const result: WorkflowResult = {
-			status: 'pending',
+			status: 'created',
+			txHash,
 			marketCategory: analysis.category,
 			refinedQuestion: analysis.refinedQuestion,
 			resolutionCriteria: analysis.resolutionCriteria,
@@ -90,11 +104,11 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
 			riskReason: analysis.riskReason,
 			suggestedDeadline: analysis.suggestedDeadline,
 		}
-		runtime.log(`Pending review: score=${analysis.riskScore}`)
+		runtime.log(`MEDIUM risk resolved via BFT — txHash: ${txHash}`)
 		return JSON.stringify(result)
 	}
 
-	// ── Step 3: Auto approve (0-30) → create market on-chain ────────────────
+	// ── Step 4: LOW risk (0-30) → Auto approve → create market on-chain ─────
 	runtime.log(`Auto-approving: score=${analysis.riskScore}`)
 
 	const txHash = submitCreateMarket(runtime, input.creator, analysis)

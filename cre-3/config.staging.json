@@ -1,5 +1,5 @@
 {
-  "verityCoreAddress": "0x32623263b4dE10FA22B74235714820f057b105Ea",
+  "verityCoreAddress": "0xEF5Fb431494da36f0459Dc167Faf7D23ad50A869",
   "chainSelectorName": "ethereum-testnet-sepolia-base-1",
   "gasLimit": "2000000",
   "groqModel": "llama-3.3-70b-versatile",

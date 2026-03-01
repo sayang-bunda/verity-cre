@@ -9,7 +9,8 @@ export const callGroq = (runtime: Runtime<Config>, prompt: string): AIAnalysis =
 		model: runtime.config.groqModel,
 		messages: [{ role: 'user', content: prompt }],
 		response_format: { type: 'json_object' },
-		temperature: 0.1,
+		temperature: 0,  // Must be 0 for BFT consensus — all 21 DON nodes must produce identical output
+		seed: 42,        // Fixed seed for deterministic output across nodes
 	})
 
 	const response = client
