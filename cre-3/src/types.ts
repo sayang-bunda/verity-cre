@@ -16,11 +16,13 @@ export interface ResolutionResult {
     outcome: number    // 1=YES, 2=NO
     confidence: number // 0–100
     reason: string
+    evidenceUrls: string[]  // news article URLs for on-chain evidence
 }
 
 export interface AiResolution {
     outcome: number
     confidence: number
     reason: string
-    evidence: string[]
+    evidence: string[]  // AI explanation points
+    evidenceUrls: string[]  // source URLs
 }

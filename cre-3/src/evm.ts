@@ -176,28 +176,30 @@ export const resolveCryptoPrice = (
         outcome: isYes ? OUTCOME_YES : OUTCOME_NO,
         confidence: 100, // Deterministic — always 100%
         reason: `Chainlink price feed: $${priceUsd.toFixed(2)} is ${isYes ? '>=' : '<'} target $${targetUsd.toFixed(2)}`,
+        evidenceUrls: [], // Deterministic — no external URLs needed
     }
 }
 
 
 /**
- * Step 5 — EVM Write: resolveMarketFromCre(marketId, outcome, confidence)
+ * Step 5 — EVM Write: resolveMarketFromCre(marketId, outcome, confidence, evidenceUrls)
  */
 export const submitResolveMarket = (
     runtime: Runtime<Config>,
     marketId: bigint,
     outcome: number,
     confidence: number,
+    evidenceUrls: string[],
 ): string => {
     const evmClient = getEvmClient(runtime)
 
     const callData = encodeFunctionData({
         abi: VerityCore,
         functionName: 'resolveMarketFromCre',
-        args: [marketId, outcome, confidence],
+        args: [marketId, outcome, confidence, evidenceUrls],
     })
 
-    runtime.log(`Encoding resolveMarketFromCre: marketId=${marketId} outcome=${outcome} confidence=${confidence}`)
+    runtime.log(`Encoding resolveMarketFromCre: marketId=${marketId} outcome=${outcome} confidence=${confidence} urls=[${evidenceUrls.slice(0, 2).join(', ')}]`)
 
     const report = runtime
         .report({

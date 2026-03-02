@@ -41,6 +41,7 @@ export const VerityCore = [
             { internalType: 'uint256', name: 'marketId', type: 'uint256' },
             { internalType: 'uint8', name: 'outcome', type: 'uint8' },
             { internalType: 'uint8', name: 'confidence', type: 'uint8' },
+            { internalType: 'string[]', name: 'evidenceUrls', type: 'string[]' },
         ],
         name: 'resolveMarketFromCre',
         outputs: [],

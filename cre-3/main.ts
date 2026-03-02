@@ -104,7 +104,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 		result = resolveCryptoPrice(runtime, resolution)
 	} else {
 		// Category 1/2/3: EVENT / SOCIAL / OTHER — AI-powered via Groq
-		const label = ['CRYPTO', 'EVENT', 'SOCIAL', 'OTHER'][market.category] ?? 'OTHER'
+		const label = ['CRYPTO_PRICE', 'EVENT', 'SOCIAL', 'OTHER'][market.category] ?? 'OTHER'
 		runtime.log(`Branch: ${label} — calling Groq AI for resolution`)
 		result = resolveWithAI(runtime, market.category, market, resolution)
 	}
@@ -124,7 +124,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 			`LOW CONFIDENCE: ${result.confidence}% < ${threshold}% — writing to chain, contract will escalate`,
 		)
 
-		const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence)
+		const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence, result.evidenceUrls)
 
 		return JSON.stringify({
 			action: 'escalated',
@@ -132,6 +132,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 			outcome: result.outcome,
 			confidence: result.confidence,
 			reason: result.reason,
+			evidenceUrls: result.evidenceUrls,
 			threshold,
 			txHash,
 		})
@@ -140,7 +141,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 	// ── Step 5: EVM Write — resolve market on-chain ──────────────────────────
 	runtime.log(`RESOLVE: confidence ${result.confidence}% >= ${threshold}% — writing resolution`)
 
-	const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence)
+	const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence, result.evidenceUrls)
 
 	const outcomeLabel = result.outcome === OUTCOME_YES ? 'YES' : 'NO'
 	runtime.log(`WF3 complete: marketId=${marketId} outcome=${outcomeLabel} txHash=${txHash}`)
@@ -152,6 +153,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 		outcomeLabel,
 		confidence: result.confidence,
 		reason: result.reason,
+		evidenceUrls: result.evidenceUrls,
 		txHash,
 	})
 }
