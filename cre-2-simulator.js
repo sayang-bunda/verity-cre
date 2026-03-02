@@ -20,11 +20,51 @@
 
 import http from 'http'
 import https from 'https'
+import fs from 'fs'
+import { resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
+import { createWalletClient, createPublicClient, http as viemHttp, encodeAbiParameters, parseAbiParameters } from 'viem'
+import { baseSepolia } from 'viem/chains'
+import { privateKeyToAccount } from 'viem/accounts'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// ─── Load .env files ──────────────────────────────────────────────────────────
+function loadEnv(p) {
+    const env = {}
+    try {
+        for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+            const t = line.trim()
+            if (!t || t.startsWith('#')) continue
+            const eq = t.indexOf('=')
+            if (eq === -1) continue
+            env[t.slice(0, eq).trim()] = t.slice(eq + 1).trim()
+        }
+    } catch { /* ignore */ }
+    return env
+}
+const _dotenv    = loadEnv(resolve(__dirname, '../verity-sc/.env'))
+const _dotenvCre = loadEnv(resolve(__dirname, '.env'))
+const PRIVATE_KEY = process.env.PRIVATE_KEY || _dotenv.PRIVATE_KEY
+if (!process.env.GROQ_API_KEY && _dotenvCre.GROQ_API_KEY) {
+    process.env.GROQ_API_KEY = _dotenvCre.GROQ_API_KEY
+}
+
+// ─── Viem clients ─────────────────────────────────────────────────────────────
+let _walletClient = null
+function getWalletClient() {
+    if (!PRIVATE_KEY) return null
+    if (!_walletClient) {
+        const account = privateKeyToAccount(PRIVATE_KEY)
+        _walletClient = createWalletClient({ account, chain: baseSepolia, transport: viemHttp('https://sepolia.base.org') })
+    }
+    return _walletClient
+}
 
 // ─── Config (mirrors cre-2/config.staging.json) ──────────────────────────────
 
 const CONFIG = {
-    verityCoreAddress: '0xEF5Fb431494da36f0459Dc167Faf7D23ad50A869',
+    verityCoreAddress: '0x8Fe663e0F229F718627f1AE82D2B30Ed8a60d13b',
     chainSelectorName: 'ethereum-testnet-sepolia-base-1',
     gasLimit: '2000000',
     groqModel: 'llama-3.3-70b-versatile',
@@ -257,7 +297,22 @@ function simulateAnalysis(prompt) {
 
 // ─── Step 6: Simulate reportManipulation (mirrors main.ts submitManipulationReport) ─
 
-function simulateManipulationReport(runtime, marketId, score, reason) {
+const CRE_ADAPTER_ABI = [
+    {
+        inputs: [
+            { name: 'metadata', type: 'bytes' },
+            { name: 'report',   type: 'bytes' },
+        ],
+        name: 'onReport',
+        outputs: [],
+        stateMutability: 'nonpayable',
+        type: 'function',
+    },
+]
+
+const WORKFLOW_ID = '0xe1a46dd8013e5749b754effd2bd197ceccfb18a0efddc9cacb8bded35b965910'
+
+async function writeManipulationReportOnChain(runtime, marketId, score, reason) {
     const ACTION_REPORT_MANIPULATION = 2
 
     runtime.log('Encoding ACTION_REPORT_MANIPULATION ABI payload...')
@@ -266,21 +321,40 @@ function simulateManipulationReport(runtime, marketId, score, reason) {
     runtime.log(`  score    : ${score}`)
     runtime.log(`  reason   : "${reason.slice(0, 80)}..."`)
 
-    // Mirror: runtime.report({ encodedPayload, encoderName, signingAlgo, hashingAlgo })
-    const payloadObj = { action: ACTION_REPORT_MANIPULATION, marketId, score, reason }
-    const encodedPayload = Buffer.from(JSON.stringify(payloadObj)).toString('base64')
-    runtime.log(`Payload base64 (first 60): ${encodedPayload.slice(0, 60)}...`)
+    const report = encodeAbiParameters(
+        [{ type: 'uint8' }, { type: 'uint256' }, { type: 'uint8' }, { type: 'string' }],
+        [ACTION_REPORT_MANIPULATION, BigInt(marketId), score, reason]
+    )
 
-    runtime.log('Simulating BFT consensus (12 DON nodes signing)...')
+    const workflowIdBytes = WORKFLOW_ID.startsWith('0x')
+        ? Buffer.from(WORKFLOW_ID.slice(2).padStart(64, '0'), 'hex')
+        : Buffer.from(WORKFLOW_ID.padStart(64, '0'), 'hex')
+    const metadata = '0x' + workflowIdBytes.toString('hex')
+
     runtime.log(`Submitting writeReport → receiver: ${CONFIG.verityCoreAddress}`)
 
-    const txHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+    const wallet = getWalletClient()
+    if (!wallet) {
+        const mockHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+        runtime.log(`[MOCK] No PRIVATE_KEY — mock txHash: ${mockHash}`)
+        return { txHash: mockHash, onChain: false }
+    }
 
-    runtime.log(`[SIM] writeReport submitted: txHash=${txHash}`)
-    runtime.log(`[SIM] TxStatus.SUCCESS (simulated — not real on-chain)`)
-    runtime.log(`Manipulation reported — txHash: ${txHash}`)
-
-    return txHash
+    try {
+        const txHash = await wallet.writeContract({
+            address: CONFIG.verityCoreAddress,
+            abi: CRE_ADAPTER_ABI,
+            functionName: 'onReport',
+            args: [metadata, report],
+        })
+        runtime.log(`[CHAIN] onReport() submitted: txHash=${txHash}`)
+        return { txHash, onChain: true }
+    } catch (err) {
+        runtime.log(`[CHAIN] ERROR: ${err.message}`)
+        const mockHash = '0x' + Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+        runtime.log(`[CHAIN] Falling back to mock txHash: ${mockHash}`)
+        return { txHash: mockHash, onChain: false }
+    }
 }
 
 // ─── Main handler (mirrors cre-2/main.ts onBetPlaced) ────────────────────────
@@ -324,13 +398,14 @@ async function onBetPlaced(bet, market, runtime) {
     const action = analysis.manipulationScore > CONFIG.SCORE_FLAG ? 'flag' : 'monitor'
     runtime.log(`${action.toUpperCase()}: score=${analysis.manipulationScore} — writing to chain`)
 
-    // Step 6: EVM Write — reportManipulation
-    const txHash = simulateManipulationReport(
+    // Step 6: EVM Write — reportManipulation (real on-chain via onReport ACTION=2)
+    const { txHash, onChain } = await writeManipulationReportOnChain(
         runtime,
         bet.marketId,
         analysis.manipulationScore,
         `[${action}] ${analysis.reason} | patterns: ${analysis.patterns_matched.join(', ')}`,
     )
+    runtime.log(`[CRE-2] TxStatus: ${onChain ? 'ON-CHAIN' : 'MOCK'} — txHash: ${txHash}`)
 
     return {
         action,
