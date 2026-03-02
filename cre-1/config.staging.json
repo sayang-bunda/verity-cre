@@ -1,5 +1,5 @@
 {
-  "verityCoreAddress": "0xEF5Fb431494da36f0459Dc167Faf7D23ad50A869",
+  "verityCoreAddress": "0x8Fe663e0F229F718627f1AE82D2B30Ed8a60d13b",
   "chainSelectorName": "ethereum-testnet-sepolia-base-1",
   "gasLimit": "2000000",
   "defaultFeeBps": 200,
