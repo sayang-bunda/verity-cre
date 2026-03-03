@@ -382,6 +382,36 @@ const VERITY_ABI = [
     },
 ]
 
+const MOCK_USDC_ABI = [
+    {
+        name: 'mint',
+        type: 'function',
+        inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }],
+        outputs: [],
+        stateMutability: 'nonpayable',
+    },
+]
+
+// Mint USDC to Verity contract to back each market's virtual 200 USDC seed.
+// _createMarket() sets poolYes=poolNo=100 USDC virtually (no real transfer),
+// so we mint real USDC here to ensure safeTransfer succeeds during claim.
+async function mintSeedUsdcToVerity(runtime) {
+    const clients = getClients()
+    if (!clients) return
+    const SEED_AMOUNT = 200_000_000n // 200 USDC (6 decimals)
+    try {
+        const txHash = await clients.walletClient.writeContract({
+            address: CONFIG.mockUsdcAddress,
+            abi: MOCK_USDC_ABI,
+            functionName: 'mint',
+            args: [CONFIG.verityCoreAddress, SEED_AMOUNT],
+        })
+        runtime.log(`[CHAIN] Minted 200 USDC to Verity contract (backs virtual seed) — txHash: ${txHash}`)
+    } catch (err) {
+        runtime.log(`[CHAIN] USDC mint warning (non-fatal): ${err.shortMessage || err.message}`)
+    }
+}
+
 async function writeReportOnChain(runtime, payloadObj) {
     const clients = getClients()
     if (!clients) {
@@ -444,6 +474,9 @@ async function writeReportOnChain(runtime, payloadObj) {
         runtime.log(`[CHAIN] onReport() submitted — txHash: ${txHash}`)
         runtime.log(`[CHAIN] Basescan: https://sepolia.basescan.org/tx/${txHash}`)
         runtime.log(`[CHAIN] (not waiting for receipt — tx is in-flight)`)
+
+        // Back the virtual 200 USDC seed with real USDC so claims can succeed
+        await mintSeedUsdcToVerity(runtime)
 
         return { txHash, onChain: true }
     } catch (err) {
@@ -1158,7 +1191,7 @@ curl -X POST http://localhost:${PORT}/trigger \\
     res.end('Not found')
 })
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
     console.log('\n\uD83D\uDD17 CRE-1 SIMULATOR \u2014 BFT OCR3 (21 nodes)')
     console.log('==========================================')
     console.log(`\uD83D\uDCE1 Endpoint     : http://localhost:${PORT}/trigger`)
@@ -1171,4 +1204,22 @@ server.listen(PORT, () => {
     console.log(`\uD83E\uDD16 Mode         : ${process.env.GROQ_API_KEY ? 'Groq AI Live (llama-3.3-70b)' : 'Simulation (no API key)'}`)
     console.log('==========================================')
     console.log('Waiting for requests...\n')
+
+    // Pre-fund Verity contract with 1M USDC on startup.
+    // _createMarket() sets virtual pools (100+100 USDC) without real transfer,
+    // so Verity needs real USDC in its balance to pay out claims.
+    const clients = getClients()
+    if (clients) {
+        try {
+            const txHash = await clients.walletClient.writeContract({
+                address: CONFIG.mockUsdcAddress,
+                abi: MOCK_USDC_ABI,
+                functionName: 'mint',
+                args: [CONFIG.verityCoreAddress, 1_000_000_000_000n], // 1M USDC
+            })
+            console.log(`[STARTUP] Pre-funded Verity with 1M USDC — txHash: ${txHash}`)
+        } catch (err) {
+            console.log(`[STARTUP] USDC pre-fund warning (non-fatal): ${err.shortMessage || err.message}`)
+        }
+    }
 })

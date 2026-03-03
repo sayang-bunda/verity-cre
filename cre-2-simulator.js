@@ -138,6 +138,21 @@ function buildAnalysisPrompt(bet, market, newsContext, priceContext, scheduledEv
         ? 'FIRST BET on this market (market just launched — this is expected and normal)'
         : `market has ${market.bettorCount} bettors`
 
+    // Creator self-bet detection
+    const isCreatorBet = market.creator && bet.bettor &&
+        bet.bettor.toLowerCase() === market.creator.toLowerCase()
+
+    // CPMM price impact: how much does this bet shift the YES probability?
+    let priceImpactPct = 0
+    if (totalPool > 0) {
+        const oldYesProb = (market.poolNo || 0) / totalPool
+        const newPoolYes = (market.poolYes || 0) + (bet.isYes ? bet.amount : 0)
+        const newPoolNo = (market.poolNo || 0) + (bet.isYes ? 0 : bet.amount)
+        const newTotalPool = newPoolYes + newPoolNo
+        const newYesProb = newTotalPool > 0 ? newPoolNo / newTotalPool : oldYesProb
+        priceImpactPct = Math.abs(oldYesProb - newYesProb) * 100
+    }
+
     return `You are a prediction market manipulation detector for an on-chain prediction market protocol.
 
 MARKET CONTEXT:
@@ -151,9 +166,14 @@ MARKET CONTEXT:
 - Deadline: ${market.deadline}
 - Current manipulation score: ${market.manipulationScore || 0}/100
 
+MARKET CREATOR:
+- Creator address: ${market.creator || 'unknown'}
+${isCreatorBet ? '⚠️ CRITICAL: THIS BETTOR IS THE MARKET CREATOR — direct conflict of interest, creator controls resolution and can manipulate outcome to profit unfairly' : '- Bettor is NOT the market creator (normal)'}
+
 THIS BET:
 - Amount: ${bet.amount} (${volumeMultiple}x pool size${isFirstBet ? ' — ignore volume spike, this is the first bet' : ' vs total volume'})
 - Direction: ${bet.isYes ? 'YES' : 'NO'}
+- Price Impact: ${priceImpactPct.toFixed(1)}% YES probability shift${priceImpactPct > 20 ? ' ⚠️ HIGH IMPACT' : ''}
 - Bettor: ${bettorContext}
 
 EXTERNAL CONTEXT:
@@ -163,15 +183,16 @@ ${scheduledEvents}
 
 Analyse this bet for potential manipulation. Consider:
 1. Volume spike: Is this bet disproportionately large vs total volume? NOTE: If this is the first bet (totalVolume=0), do NOT penalise for volume spike — it is expected.
-2. Price impact: Does this bet drastically move the price?
+2. Price impact: Does this bet drastically move the price? >20% shift is suspicious.
 3. Timing: Is this suspiciously close to deadline with no supporting evidence?
 4. Information asymmetry: Is there news that would justify this bet?
 5. Wash trading patterns: Is the bettor acting suspiciously?
+6. CREATOR SELF-BET: Is the bettor the same as the market creator? This is a major red flag — the creator controls resolution and can manipulate the outcome to profit from their own position.
 
 Score 0-100:
 - 0-30: Normal trading activity, no concern (first bets on new markets should score here)
 - 31-80: Suspicious but not conclusive, worth monitoring
-- 81-100: Highly likely manipulation, market should be paused
+- 81-100: Highly likely manipulation, market should be paused (creator self-bets ALWAYS score here)
 
 Respond ONLY with valid JSON (no markdown, no extra text):
 {
@@ -243,6 +264,16 @@ async function callGroqAI(runtime, prompt) {
 
 function simulateAnalysis(prompt) {
     const lower = prompt.toLowerCase()
+
+    // CREATOR SELF-BET: deterministic override — always flag immediately
+    if (lower.includes('critical: this bettor is the market creator')) {
+        return {
+            manipulationScore: 85,
+            reason: 'Market creator is betting on their own market. Direct conflict of interest — creator controls resolution and can manipulate outcome to profit from their own position.',
+            patterns_matched: ['CREATOR_SELF_BET', 'conflict_of_interest'],
+            recommendation: 'flag',
+        }
+    }
 
     // Extract volume multiple from prompt
     const volumeMatch = lower.match(/(\d+(?:\.\d+)?)x total volume/)
@@ -373,6 +404,30 @@ async function onBetPlaced(bet, market, runtime) {
 
     const categoryName = CATEGORY_NAMES[market.category] ?? 'OTHER'
     runtime.log(`Market: question="${market.question}" category=${categoryName} poolYes=${market.poolYes} poolNo=${market.poolNo} bettors=${market.bettorCount}`)
+
+    // DETERMINISTIC PRE-CHECK: creator self-bet — no AI needed, always flag
+    const isCreatorBet = market.creator && bet.bettor &&
+        bet.bettor.toLowerCase() === market.creator.toLowerCase()
+    if (isCreatorBet) {
+        runtime.log(`[CREATOR_SELF_BET] Bettor ${bet.bettor} === market creator — forcing score=85, flagging immediately`)
+        const reason = 'Market creator is betting on their own market. Direct conflict of interest — creator controls resolution and can manipulate outcome to profit from their own position.'
+        const { txHash, onChain } = await writeManipulationReportOnChain(
+            runtime,
+            bet.marketId,
+            85,
+            `[CREATOR_SELF_BET] ${reason}`,
+        )
+        runtime.log(`[CRE-2] CREATOR_SELF_BET TxStatus: ${onChain ? 'ON-CHAIN' : 'MOCK'} — txHash: ${txHash}`)
+        return {
+            action: 'flag',
+            manipulationScore: 85,
+            reason,
+            patterns_matched: ['CREATOR_SELF_BET', 'conflict_of_interest'],
+            recommendation: 'flag',
+            txHash,
+            marketPaused: true,
+        }
+    }
 
     // Step 3: External context (simulated)
     const newsContext = simulateNewsContext(market.category, bet.amount, market.totalVolume)
