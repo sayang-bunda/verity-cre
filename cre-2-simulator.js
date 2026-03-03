@@ -64,7 +64,7 @@ function getWalletClient() {
 // ─── Config (mirrors cre-2/config.staging.json) ──────────────────────────────
 
 const CONFIG = {
-    verityCoreAddress: '0x8Fe663e0F229F718627f1AE82D2B30Ed8a60d13b',
+    verityCoreAddress: '0xfE07F9EE94D5DCb6F5E46297457C6f36c6C36073',
     chainSelectorName: 'ethereum-testnet-sepolia-base-1',
     gasLimit: '2000000',
     groqModel: 'llama-3.3-70b-versatile',
@@ -129,11 +129,13 @@ function simulateScheduledEvents(category) {
 function buildAnalysisPrompt(bet, market, newsContext, priceContext, scheduledEvents) {
     const totalPool = (market.poolYes || 0) + (market.poolNo || 0)
     const yesPrice = totalPool > 0 ? ((market.poolNo / totalPool) * 100).toFixed(1) : '50.0'
+    const isFirstBet = market.totalVolume === 0 || (market.bettorCount || 0) <= 1
+    // Use pool size as baseline for first bets — avoids misleading 999x spike
     const volumeMultiple = market.totalVolume > 0
         ? (bet.amount / market.totalVolume).toFixed(1)
-        : '999'
-    const bettorContext = (market.bettorCount || 0) <= 1
-        ? 'first time in this market'
+        : totalPool > 0 ? (bet.amount / totalPool).toFixed(2) : '1.00'
+    const bettorContext = isFirstBet
+        ? 'FIRST BET on this market (market just launched — this is expected and normal)'
         : `market has ${market.bettorCount} bettors`
 
     return `You are a prediction market manipulation detector for an on-chain prediction market protocol.
@@ -144,13 +146,13 @@ MARKET CONTEXT:
 - Category: ${CATEGORY_NAMES[market.category] ?? 'OTHER'}
 - Current YES price: ${yesPrice}%
 - Pool sizes: YES=${market.poolYes} / NO=${market.poolNo}
-- Total volume: ${market.totalVolume}
+- Total volume: ${market.totalVolume} ${isFirstBet ? '(NEW MARKET — zero prior trading volume, first bet is always normal)' : ''}
 - Bettors: ${market.bettorCount}
 - Deadline: ${market.deadline}
 - Current manipulation score: ${market.manipulationScore || 0}/100
 
 THIS BET:
-- Amount: ${bet.amount} (${volumeMultiple}x total volume)
+- Amount: ${bet.amount} (${volumeMultiple}x pool size${isFirstBet ? ' — ignore volume spike, this is the first bet' : ' vs total volume'})
 - Direction: ${bet.isYes ? 'YES' : 'NO'}
 - Bettor: ${bettorContext}
 
@@ -160,14 +162,14 @@ ${market.category === 0 ? `- Current price: ${priceContext}` : ''}
 ${scheduledEvents}
 
 Analyse this bet for potential manipulation. Consider:
-1. Volume spike: Is this bet disproportionately large vs total volume?
+1. Volume spike: Is this bet disproportionately large vs total volume? NOTE: If this is the first bet (totalVolume=0), do NOT penalise for volume spike — it is expected.
 2. Price impact: Does this bet drastically move the price?
 3. Timing: Is this suspiciously close to deadline with no supporting evidence?
 4. Information asymmetry: Is there news that would justify this bet?
 5. Wash trading patterns: Is the bettor acting suspiciously?
 
 Score 0-100:
-- 0-30: Normal trading activity, no concern
+- 0-30: Normal trading activity, no concern (first bets on new markets should score here)
 - 31-80: Suspicious but not conclusive, worth monitoring
 - 81-100: Highly likely manipulation, market should be paused
 

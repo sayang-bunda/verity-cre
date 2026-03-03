@@ -80,7 +80,7 @@ function getClients() {
 // ─── Config (mirrors cre-3/config.staging.json) ───────────────────────────────
 
 const CONFIG = {
-    verityCoreAddress: '0x8Fe663e0F229F718627f1AE82D2B30Ed8a60d13b',
+    verityCoreAddress: '0xfE07F9EE94D5DCb6F5E46297457C6f36c6C36073',
     chainSelectorName: 'ethereum-testnet-sepolia-base-1',
     gasLimit: '2000000',
     groqModel: 'llama-3.3-70b-versatile',
@@ -400,6 +400,20 @@ const CRE_ADAPTER_ABI = [
         outputs: [],
         stateMutability: 'nonpayable',
     },
+    {
+        // Demo bypass — no deadline check (added in latest SC deployment)
+        name: 'forceSettleFromCre',
+        type: 'function',
+        inputs: [
+            { name: 'marketId',     type: 'uint256' },
+            { name: 'outcome',      type: 'uint8'   },
+            { name: 'confidence',   type: 'uint8'   },
+            { name: 'reason',       type: 'string'  },
+            { name: 'evidenceUrls', type: 'string[]'},
+        ],
+        outputs: [],
+        stateMutability: 'nonpayable',
+    },
 ]
 
 // keccak256("cre-3-smartresolve-staging") — unique WORKFLOW_ID for CRE-3
@@ -460,9 +474,42 @@ async function writeResolveOnChain(runtime, marketId, outcome, confidence, reaso
     }
 }
 
+// ─── Force settle (demo bypass — calls forceSettleFromCre, no deadline check) ─
+
+async function forceWriteResolveOnChain(runtime, marketId, outcome, confidence, reason, evidenceUrls) {
+    runtime.log('[FORCE] Demo bypass — calling forceSettleFromCre (no deadline check)')
+    runtime.log(`  marketId    : ${marketId}`)
+    runtime.log(`  outcome     : ${outcome} (${outcome === OUTCOME_YES ? 'YES' : 'NO'})`)
+    runtime.log(`  confidence  : ${confidence}%`)
+
+    const clients = getClients()
+    if (!clients) {
+        const hash = mockTxHash()
+        runtime.log(`[MOCK] No PRIVATE_KEY — mock txHash: ${hash}`)
+        return { txHash: hash, onChain: false }
+    }
+
+    try {
+        const txHash = await clients.walletClient.writeContract({
+            address: CONFIG.verityCoreAddress,
+            abi: CRE_ADAPTER_ABI,
+            functionName: 'forceSettleFromCre',
+            args: [BigInt(marketId), outcome, confidence, reason, evidenceUrls],
+        })
+        runtime.log(`[CHAIN] forceSettleFromCre() submitted: txHash=${txHash}`)
+        runtime.log(`[CHAIN] Basescan: https://sepolia.basescan.org/tx/${txHash}`)
+        return { txHash, onChain: true }
+    } catch (err) {
+        runtime.log(`[CHAIN] ERROR: ${err.shortMessage || err.message}`)
+        const hash = mockTxHash()
+        runtime.log(`[CHAIN] Falling back to mock txHash: ${hash}`)
+        return { txHash: hash, onChain: false, chainError: err.shortMessage || err.message }
+    }
+}
+
 // ─── Main handler (mirrors cre-3/main.ts onSettlementRequested) ──────────────
 
-async function onSettlementRequested(marketId, market, resolution, runtime) {
+async function onSettlementRequested(marketId, market, resolution, runtime, force = false) {
     runtime.log('WF3 Smart Resolution — SettlementRequested event received')
     runtime.log(`Settlement requested for marketId=${marketId}`)
 
@@ -523,8 +570,18 @@ async function onSettlementRequested(marketId, market, resolution, runtime) {
     const threshold = CONFIG.confidenceThreshold
     const outcomeLabel = result.outcome === OUTCOME_YES ? 'YES' : 'NO'
 
-    // Both resolved and escalated write to chain.
-    const { txHash, onChain } = await writeResolveOnChain(
+    // force=true: ALWAYS override confidence to 95 so market always resolves (never escalates)
+    // Do this unconditionally — regardless of what Groq returned
+    if (force) {
+        runtime.log(`[FORCE] Overriding confidence ${result.confidence}% → 95% (demo bypass — always resolves)`)
+        result.confidence = 95
+        result.reason = `[FORCE RESOLVED] ${result.reason}`
+    }
+
+    // force=true → forceSettleFromCre (no deadline check, demo bypass)
+    // force=false → onReport with ACTION_RESOLVE_MARKET (normal flow, requires deadline passed)
+    const writeFn = force ? forceWriteResolveOnChain : writeResolveOnChain
+    const { txHash, onChain } = await writeFn(
         runtime,
         marketId,
         result.outcome,
@@ -609,16 +666,19 @@ const server = http.createServer(async (req, res) => {
                 const payload = JSON.parse(body)
 
                 // Expect: { marketId, market: MarketInfo, resolution: ResolutionData }
-                const { marketId, market, resolution } = payload
+                const { marketId, market, resolution, force } = payload
                 if (marketId === undefined || !market) {
                     throw new Error('Request must have { marketId, market, resolution }')
                 }
+
+                if (force) runtime.log('[FORCE] Demo bypass mode — will use forceSettleFromCre (no deadline check)')
 
                 const result = await onSettlementRequested(
                     marketId,
                     market,
                     resolution ?? {},
                     runtime,
+                    !!force,
                 )
 
                 const response = {

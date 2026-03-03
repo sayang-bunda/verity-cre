@@ -15,9 +15,9 @@
  *   Phase 4 — Transmission : Threshold sig + report sent to Verity Core
  *
  * Contracts (Base Sepolia):
- *   Verity Core   : 0x8Fe663e0F229F718627f1AE82D2B30Ed8a60d13b
+ *   Verity Core   : 0xfE07F9EE94D5DCb6F5E46297457C6f36c6C36073
  *   MockUSDC      : 0x9643419d69363278Bf74aA1494c3394aBF9E25da
- *   PositionToken : 0xB2536fe665615a75eA5b00da5705D253CB65D61F
+ *   PositionToken : 0x8bfC35894DF3Bf5705a2ae8F99D3d64f19784B04
  *
  * Run: node cre-simulator.js
  * POST http://localhost:3001/trigger
@@ -83,9 +83,9 @@ function getClients() {
 // ─── Config (mirrors cre-1/config.staging.json + config.ts) ──────────────────
 
 const CONFIG = {
-    verityCoreAddress:   '0x8Fe663e0F229F718627f1AE82D2B30Ed8a60d13b',
+    verityCoreAddress:   '0xfE07F9EE94D5DCb6F5E46297457C6f36c6C36073',
     mockUsdcAddress:     '0x9643419d69363278Bf74aA1494c3394aBF9E25da',
-    positionTokenAddress:'0xB2536fe665615a75eA5b00da5705D253CB65D61F',
+    positionTokenAddress:'0x8bfC35894DF3Bf5705a2ae8F99D3d64f19784B04',
     chainSelectorName:   'ethereum-testnet-sepolia-base-1',
     chainId:             84532,
     gasLimit:            '2000000',
@@ -391,10 +391,14 @@ async function writeReportOnChain(runtime, payloadObj) {
 
     const { walletClient, publicClient } = clients
 
-    // ABI-encode report (mirrors market.ts encodeAbiParameters exactly)
+    // ABI-encode report (mirrors CREAdapter._handleCreateMarket exactly)
+    // New SC layout: (uint8 action, uint256 proposalId, address creator, uint64 deadline,
+    //                 uint16 feeBps, uint8 category, string question, string resolutionCriteria,
+    //                 string dataSources, int256 targetValue, address priceFeedAddress, uint8 riskScore)
     const report = encodeAbiParameters(
         [
             { type: 'uint8'   },  // action
+            { type: 'uint256' },  // proposalId
             { type: 'address' },  // creator
             { type: 'uint64'  },  // deadline
             { type: 'uint16'  },  // feeBps
@@ -404,9 +408,11 @@ async function writeReportOnChain(runtime, payloadObj) {
             { type: 'string'  },  // dataSources
             { type: 'int256'  },  // targetValue
             { type: 'address' },  // priceFeedAddress
+            { type: 'uint8'   },  // riskScore
         ],
         [
             payloadObj.action,
+            BigInt(payloadObj.proposalId ?? 0),
             payloadObj.creator,
             BigInt(payloadObj.deadline),
             payloadObj.feeBps,
@@ -416,6 +422,7 @@ async function writeReportOnChain(runtime, payloadObj) {
             payloadObj.dataSources,
             BigInt(payloadObj.targetValue),
             payloadObj.priceFeedAddress,
+            payloadObj.riskScore ?? 0,
         ]
     )
 
@@ -610,7 +617,12 @@ async function runBFTConsensus(runtime, payloadObj) {
 
 // ─── Direct write for LOW risk (no BFT required) ─────────────────────────────
 
-async function simulateDirectWrite(runtime, creator, analysis, inputDeadline, inputFeeBps) {
+async function simulateDirectWrite(runtime, creator, analysis, inputDeadline, inputFeeBps, proposalId = 0) {
+    if (proposalId === undefined || proposalId === null || proposalId < 0) {
+        const errMsg = `Invalid proposalId=${proposalId}. The proposeMarket() TX must succeed and return a valid proposal ID before calling CRE.`
+        runtime.log(`ERROR: ${errMsg}`)
+        return { txHash: null, onChain: false, chainError: errMsg, payloadObj: null }
+    }
     const ACTION_CREATE_MARKET = 1
     const category       = CATEGORY_MAP[analysis.category] ?? 3
     const deadlineTs     = (inputDeadline && inputDeadline > 0)
@@ -622,8 +634,9 @@ async function simulateDirectWrite(runtime, creator, analysis, inputDeadline, in
         ? analysis.priceFeedAddress
         : '0x0000000000000000000000000000000000000000'
 
-    runtime.log('Encoding ABI payload (mirrors market.ts encodeAbiParameters)...')
+    runtime.log('Encoding ABI payload (mirrors CREAdapter._handleCreateMarket)...')
     runtime.log(`  action             : ${ACTION_CREATE_MARKET} (ACTION_CREATE_MARKET)`)
+    runtime.log(`  proposalId         : ${proposalId}`)
     runtime.log(`  creator            : ${creator}`)
     runtime.log(`  deadline           : ${deadlineTs} (${analysis.suggestedDeadline})`)
     runtime.log(`  feeBps             : ${CONFIG.defaultFeeBps}`)
@@ -633,9 +646,11 @@ async function simulateDirectWrite(runtime, creator, analysis, inputDeadline, in
     runtime.log(`  dataSources        : ${JSON.stringify(analysis.dataSources)}`)
     runtime.log(`  targetValue        : ${targetValue} (int256, 8 decimals)`)
     runtime.log(`  priceFeedAddress   : ${priceFeedAddress}`)
+    runtime.log(`  riskScore          : ${analysis.riskScore ?? 0}`)
 
     const payloadObj = {
-        action: ACTION_CREATE_MARKET,
+        action:            ACTION_CREATE_MARKET,
+        proposalId:        Number(proposalId),
         creator,
         deadline:          deadlineTs,
         feeBps:            (inputFeeBps && inputFeeBps > 0) ? inputFeeBps : CONFIG.defaultFeeBps,
@@ -645,6 +660,7 @@ async function simulateDirectWrite(runtime, creator, analysis, inputDeadline, in
         dataSources:       JSON.stringify(analysis.dataSources),
         targetValue,
         priceFeedAddress,
+        riskScore:         analysis.riskScore ?? 0,
     }
 
     const encodedPayload = Buffer.from(JSON.stringify(payloadObj)).toString('base64')
@@ -872,6 +888,12 @@ async function onHTTPTrigger(input, runtime) {
     if (analysis.riskScore > CONFIG.RISK_AUTO_APPROVE) {
         runtime.log(`MEDIUM risk: score=${analysis.riskScore} — starting async BFT OCR3 consensus`)
 
+        const incomingProposalId = Number(input.proposalId ?? -1)
+        if (incomingProposalId < 0) {
+            runtime.log(`ERROR: Invalid proposalId=${incomingProposalId}. proposeMarket() must succeed first.`)
+            return { status: 'rejected', reason: `Invalid proposalId=${incomingProposalId}. Ensure the proposeMarket() on-chain TX succeeded before calling CRE.` }
+        }
+
         const ACTION_CREATE_MARKET = 1
         const category       = CATEGORY_MAP[analysis.category] ?? 3
         const deadlineTs     = (input.deadline && input.deadline > 0)
@@ -885,6 +907,7 @@ async function onHTTPTrigger(input, runtime) {
 
         const payloadObj = {
             action:            ACTION_CREATE_MARKET,
+            proposalId:        incomingProposalId,
             creator:           input.creator,
             deadline:          deadlineTs,
             feeBps:            (input.feeBps && input.feeBps > 0) ? input.feeBps : CONFIG.defaultFeeBps,
@@ -894,6 +917,7 @@ async function onHTTPTrigger(input, runtime) {
             dataSources:       JSON.stringify(analysis.dataSources),
             targetValue,
             priceFeedAddress,
+            riskScore:         analysis.riskScore ?? 0,
         }
 
         // Register job (use runtime.requestId set by the HTTP server)
@@ -938,7 +962,12 @@ async function onHTTPTrigger(input, runtime) {
 
     // ── LOW risk (0-30): Auto approve → direct writeReport ───────────────────
     runtime.log(`LOW risk: score=${analysis.riskScore} — auto-approving (no BFT required)`)
-    const { txHash, onChain, chainError, payloadObj } = await simulateDirectWrite(runtime, input.creator, analysis, input.deadline, input.feeBps)
+    const lowProposalId = Number(input.proposalId ?? -1)
+    if (lowProposalId < 0) {
+        runtime.log(`ERROR: Invalid proposalId=${lowProposalId}. proposeMarket() must succeed first.`)
+        return { status: 'rejected', reason: `Invalid proposalId=${lowProposalId}. Ensure the proposeMarket() on-chain TX succeeded before calling CRE.` }
+    }
+    const { txHash, onChain, chainError, payloadObj } = await simulateDirectWrite(runtime, input.creator, analysis, input.deadline, input.feeBps, lowProposalId)
 
     return {
         status:            'created',
