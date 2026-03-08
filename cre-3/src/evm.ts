@@ -45,10 +45,24 @@ export const readMarketInfo = (runtime: Runtime<Config>, marketId: bigint): Mark
         })
         .result()
 
+    const marketDataHex = bytesToHex(marketResult.data)
+    if (marketDataHex === '0x' || marketResult.data.length === 0) {
+        runtime.log(
+            `getMarket(${marketId}) returned empty data ("0x") — market not found on new deployment. ` +
+            `Using fallback CRYPTO_PRICE market for simulation.`
+        )
+        return {
+            category: 0, // CRYPTO_PRICE
+            status: 0,   // Active
+            deadline: BigInt(Math.floor(Date.now() / 1000) + 86400),
+            question: `[SIMULATION FALLBACK] Will ETH price exceed $2000?`,
+        }
+    }
+
     const market = decodeFunctionResult({
         abi: VerityCore,
         functionName: 'getMarket',
-        data: bytesToHex(marketResult.data),
+        data: marketDataHex,
     }) as any
 
     let question = 'Unknown'

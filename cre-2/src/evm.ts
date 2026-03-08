@@ -3,7 +3,7 @@ import {
     EVMClient,
     encodeCallMsg,
     hexToBase64,
-    LAST_FINALIZED_BLOCK_NUMBER,
+    LATEST_BLOCK_NUMBER,
     TxStatus,
     type Runtime,
 } from '@chainlink/cre-sdk'
@@ -42,7 +42,7 @@ export const readMarketData = (runtime: Runtime<Config>, marketId: bigint): Mark
                 to: contractAddr,
                 data: encodeFunctionData({ abi: VerityCore, functionName: 'getMarket', args: [marketId] }),
             }),
-            blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+            blockNumber: LATEST_BLOCK_NUMBER,
         })
         .result()
 
@@ -62,7 +62,7 @@ export const readMarketData = (runtime: Runtime<Config>, marketId: bigint): Mark
                     to: contractAddr,
                     data: encodeFunctionData({ abi: VerityCore, functionName: 'getMarketQuestion', args: [marketId] }),
                 }),
-                blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+                blockNumber: LATEST_BLOCK_NUMBER,
             })
             .result()
 
@@ -85,7 +85,7 @@ export const readMarketData = (runtime: Runtime<Config>, marketId: bigint): Mark
                     to: contractAddr,
                     data: encodeFunctionData({ abi: VerityCore, functionName: 'getBettorCount', args: [marketId] }),
                 }),
-                blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+                blockNumber: LATEST_BLOCK_NUMBER,
             })
             .result()
 
@@ -137,7 +137,7 @@ export const readChainlinkPrice = (runtime: Runtime<Config>, category: number): 
                     to: feedAddress as Address,
                     data: encodeFunctionData({ abi: ChainlinkPriceFeed, functionName: 'latestRoundData', args: [] }),
                 }),
-                blockNumber: LAST_FINALIZED_BLOCK_NUMBER,
+                blockNumber: LATEST_BLOCK_NUMBER,
             })
             .result()
 

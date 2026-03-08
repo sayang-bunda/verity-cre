@@ -4,14 +4,16 @@ import { baseSepolia } from 'viem/chains'
 import { writeFileSync } from 'fs'
 
 const PRIVATE_KEY             = '0x322ba80cd878d0a923045fc0ae2a3c8a07dfc19b7685912647ee16b0038182bf'
-const VERITY_CORE             = '0x357E246B17bEF83BE4eA3321cBCA1BB642D17150'
+const VERITY_CORE             = '0xBcACD632254b7066353130D540fbBd9C44858226'
 const MOCK_USDC               = '0x9643419d69363278Bf74aA1494c3394aBF9E25da'
-const MOCK_KEYSTONE_FORWARDER = '0x4aa01B2E8900EAfF69f761e0D9a2b58570F242F3'
+const MOCK_KEYSTONE_FORWARDER = '0xBa2194159E78B3A78e717B0dBc5440652b960262'
 const QUESTION                = 'Will ETH price reach $5000 before end of the month?'
 
 const account      = privateKeyToAccount(PRIVATE_KEY)
 const walletClient = createWalletClient({ account, chain: baseSepolia, transport: http('https://sepolia.base.org') })
 const publicClient = createPublicClient({ chain: baseSepolia, transport: http('https://sepolia.base.org') })
+
+const { maxFeePerGas, maxPriorityFeePerGas } = await publicClient.estimateFeesPerGas()
 
 // Ensure MockKeystoneForwarder points to the current Verity address
 console.log('[0/2] Syncing MockKeystoneForwarder → Verity...')
@@ -26,6 +28,8 @@ if (currentVerity.toLowerCase() !== VERITY_CORE.toLowerCase()) {
         abi: parseAbi(['function setVerity(address)']),
         functionName: 'setVerity',
         args: [VERITY_CORE],
+        maxFeePerGas,
+        maxPriorityFeePerGas,
     })
     await publicClient.waitForTransactionReceipt({ hash: setVerityTx })
     console.log(`      setVerity done — ${setVerityTx}`)
@@ -39,6 +43,8 @@ const approveTx = await walletClient.writeContract({
     abi: parseAbi(['function approve(address,uint256) returns (bool)']),
     functionName: 'approve',
     args: [VERITY_CORE, parseUnits('5', 6)],
+    maxFeePerGas,
+    maxPriorityFeePerGas,
 })
 await publicClient.waitForTransactionReceipt({ hash: approveTx })
 console.log(`      OK — ${approveTx}`)
@@ -49,6 +55,8 @@ const proposeTx = await walletClient.writeContract({
     abi: parseAbi(['function proposeMarket(string) returns (uint256)']),
     functionName: 'proposeMarket',
     args: [JSON.stringify({ question: QUESTION })],
+    maxFeePerGas,
+    maxPriorityFeePerGas,
 })
 const rec = await publicClient.waitForTransactionReceipt({ hash: proposeTx })
 console.log(`      OK — ${proposeTx}`)
@@ -65,6 +73,30 @@ for (const log of rec.logs) {
     } catch (_) {}
 }
 if (!proposalId) { console.error('Could not parse MarketProposed event'); process.exit(1) }
+
+const waitForProposal = async (proposalId: string) => {
+    while (true) {
+        try {
+            const proposal = await publicClient.readContract({
+                address: VERITY_CORE,
+                abi: parseAbi(['function getProposal(uint256) view returns ((address, uint256, string, uint8))']),
+                functionName: 'getProposal',
+                args: [BigInt(proposalId)],
+            })
+            // status is the 4th element in the tuple, 0 = Pending
+            if (proposal[3] === 0) {
+                console.log(`\nProposal ${proposalId} is pending, ready for CRE.`)
+                return
+            }
+        } catch (e) {
+            // Ignore errors, just retry
+        }
+        console.log(`\nWaiting for proposal ${proposalId} to be ready...`)
+        await new Promise(resolve => setTimeout(resolve, 2000))
+    }
+}
+
+await waitForProposal(proposalId)
 
 const payload = { creator: account.address, proposalId, inputType: 'manual', question: QUESTION }
 writeFileSync('./payload.json', JSON.stringify(payload, null, 4))

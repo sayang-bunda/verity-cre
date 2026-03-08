@@ -4,7 +4,7 @@ import type { AiAnalysis, BetInfo, MarketData } from './types'
 
 const CATEGORY_NAMES = ['CRYPTO', 'EVENT', 'SOCIAL', 'OTHER'] as const
 
-const formatEth = (wei: bigint): string => `${(Number(wei) / 1e18).toFixed(4)} ETH`
+const formatUsdc = (amount: bigint): string => `$${(Number(amount) / 1e6).toFixed(2)} USDC`
 
 /**
  * Step 4 — Build AI prompt for manipulation detection
@@ -36,14 +36,14 @@ MARKET CONTEXT:
 - Market ID: ${bet.marketId.toString()}
 - Category: ${CATEGORY_NAMES[market.category] ?? 'OTHER'}
 - Current YES price: ${yesPrice.toFixed(1)}%
-- Pool sizes: YES=${formatEth(market.poolYes)} / NO=${formatEth(market.poolNo)}
-- Total volume: ${formatEth(market.totalVolume)}
+- Pool sizes: YES=${formatUsdc(market.poolYes)} / NO=${formatUsdc(market.poolNo)}
+- Total volume: ${formatUsdc(market.totalVolume)}
 - Bettors: ${market.bettorCount.toString()}
 - Deadline: ${new Date(Number(market.deadline) * 1000).toISOString()}
 - Current manipulation score: ${market.manipulationScore}/100
 
 THIS BET:
-- Amount: ${formatEth(bet.amount)} (${volumeMultiple.toFixed(1)}x total volume)
+- Amount: ${formatUsdc(bet.amount)} (${volumeMultiple.toFixed(1)}x total volume)
 - Direction: ${bet.isYes ? 'YES' : 'NO'}
 - Bettor: ${bettorContext}
 
