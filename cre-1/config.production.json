@@ -3,5 +3,9 @@
   "chainSelectorName": "ethereum-testnet-sepolia-base-1",
   "gasLimit": "2000000",
   "defaultFeeBps": 200,
-  "groqModel": "llama-3.3-70b-versatile"
+  "groqModel": "llama-3.3-70b-versatile",
+  "priceFeeds": {
+    "ETH": "0x4aDC67d868Ec7b4e3Fb400c68F57fbb0760B53D1",
+    "BTC": "0x4aDC67d868Ec7b4e3Fb400c68F57fbb0760B53D1"
+  }
 }

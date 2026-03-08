@@ -124,7 +124,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 			`LOW CONFIDENCE: ${result.confidence}% < ${threshold}% — writing to chain, contract will escalate`,
 		)
 
-		const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence, result.evidenceUrls)
+		const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence, result.reason, result.evidenceUrls)
 
 		return JSON.stringify({
 			action: 'escalated',
@@ -141,7 +141,7 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 	// ── Step 5: EVM Write — resolve market on-chain ──────────────────────────
 	runtime.log(`RESOLVE: confidence ${result.confidence}% >= ${threshold}% — writing resolution`)
 
-	const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence, result.evidenceUrls)
+	const txHash = submitResolveMarket(runtime, marketId, result.outcome, result.confidence, result.reason, result.evidenceUrls)
 
 	const outcomeLabel = result.outcome === OUTCOME_YES ? 'YES' : 'NO'
 	runtime.log(`WF3 complete: marketId=${marketId} outcome=${outcomeLabel} txHash=${txHash}`)

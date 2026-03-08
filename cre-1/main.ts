@@ -37,6 +37,9 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
 	if (!input.creator || !input.inputType) {
 		throw new Error('Missing required fields: creator, inputType')
 	}
+	if (input.proposalId === undefined || input.proposalId === null || input.proposalId === '') {
+		throw new Error('Missing required field: proposalId (from proposeMarket)')
+	}
 
 	let content: string
 	if (input.inputType === 'manual') {
@@ -91,7 +94,7 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
 			`MEDIUM risk: score=${analysis.riskScore} — submitting for BFT 21-node consensus`,
 		)
 
-		const txHash = submitCreateMarket(runtime, input.creator, analysis)
+		const txHash = submitCreateMarket(runtime, input.creator, analysis, input.proposalId)
 
 		const result: WorkflowResult = {
 			status: 'created',
@@ -111,7 +114,7 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
 	// ── Step 4: LOW risk (0-30) → Auto approve → create market on-chain ─────
 	runtime.log(`Auto-approving: score=${analysis.riskScore}`)
 
-	const txHash = submitCreateMarket(runtime, input.creator, analysis)
+	const txHash = submitCreateMarket(runtime, input.creator, analysis, input.proposalId)
 
 	const result: WorkflowResult = {
 		status: 'created',

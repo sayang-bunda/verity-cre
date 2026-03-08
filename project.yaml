@@ -30,6 +30,10 @@ staging-settings:
       url: https://sepolia.base.org
     - chain-name: ethereum-mainnet
       url: https://eth.llamarpc.com
+  experimental-chains:
+    - chain-selector: 123456
+      rpc-url: https://sepolia.base.org
+      forwarder: "0x9c8094090357e19449036dCD9F747001e8DC2394"
 
 # ==========================================================================
 production-settings:

@@ -11,6 +11,7 @@ import {
     type Address,
     decodeFunctionResult,
     encodeFunctionData,
+    encodeAbiParameters,
     zeroAddress,
 } from 'viem'
 import { VerityCore, ChainlinkPriceFeed } from '../../contracts/abi'
@@ -171,13 +172,17 @@ export const submitManipulationReport = (
 ): string => {
     const evmClient = getEvmClient(runtime)
 
-    const callData = encodeFunctionData({
-        abi: VerityCore,
-        functionName: 'reportManipulation',
-        args: [marketId, score, reason],
-    })
+    const callData = encodeAbiParameters(
+        [
+            { type: 'uint8' },
+            { type: 'uint256' },
+            { type: 'uint8' },
+            { type: 'string' },
+        ],
+        [2, marketId, score, reason] // 2 is ACTION_REPORT_MANIPULATION
+    )
 
-    runtime.log(`Encoded reportManipulation: marketId=${marketId} score=${score}`)
+    runtime.log(`Encoded ACTION_REPORT_MANIPULATION: marketId=${marketId} score=${score}`)
 
     const report = runtime
         .report({
@@ -188,9 +193,11 @@ export const submitManipulationReport = (
         })
         .result()
 
+    // Staging: writeReportReceiver = KeystoneOnReportAdapter (has CRE_ROLE, forwards to Verity)
+    // Production: writeReportReceiver absent → falls back to verityCoreAddress (real KF handles it)
     const resp = evmClient
         .writeReport(runtime, {
-            receiver: runtime.config.verityCoreAddress,
+            receiver: runtime.config.writeReportReceiver ?? runtime.config.verityCoreAddress,
             report,
             gasConfig: { gasLimit: runtime.config.gasLimit },
         })

@@ -17,7 +17,7 @@ Risk scoring criteria:
 - 71-100 (AUTO REJECT): Unverifiable, subjective, spam, or harmful
 
 Category guidance:
-- CRYPTO: "Will ETH hit $3,000?" — resolve via Chainlink Price Feed; set targetValue (USD * 1e8) and priceFeedAddress
+- CRYPTO: "Will ETH hit $3,000?" — extract targetValue as number (e.g. 3000 for $3,000), set asset (e.g. "ETH")
 - EVENT: "Will the FIFA World Cup 2026 final be held in the US?" — resolve via official event results or major news outlets
 - SOCIAL: "Will Elon Musk's tweet about X get 1M likes?" — resolve via social media metrics or news sources
 - OTHER: Any other verifiable claim — resolve via news sources
@@ -33,5 +33,9 @@ Respond ONLY with valid JSON (no markdown, no extra text):
   "riskReason": "Well-known public event, verifiable via official sources",
   "suggestedDeadline": "2026-03-01T23:59:59Z",
   "targetValue": null,
-  "priceFeedAddress": null
-}`
+  "asset": null
+}
+
+For CRYPTO category, you MUST include:
+- "targetValue": <number> (e.g. 5000 for "$5000", 3000 for "$3,000")
+- "asset": "<string>" (e.g. "ETH", "BTC")`

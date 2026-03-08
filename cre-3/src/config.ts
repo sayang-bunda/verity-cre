@@ -2,6 +2,9 @@ import { z } from 'zod'
 
 export const configSchema = z.object({
     verityCoreAddress: z.string(),
+    // Hackathon: MockKeystoneForwarder address as writeReport receiver.
+    // Production: omit this field — receiver falls back to verityCoreAddress (real Keystone Forwarder handles routing).
+    writeReportReceiver: z.string().optional(),
     chainSelectorName: z.string(),
     gasLimit: z.string(),
     groqModel: z.string(),

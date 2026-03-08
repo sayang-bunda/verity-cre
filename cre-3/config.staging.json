@@ -1,7 +1,9 @@
 {
-  "verityCoreAddress": "0xEF5Fb431494da36f0459Dc167Faf7D23ad50A869",
+  "secretsLabel": "staging-secrets",
+  "verityCoreAddress": "0x8534397816cD5c866cf7ba542A5ffBc6d89d3b44",
+  "writeReportReceiver": "0x8534397816cD5c866cf7ba542A5ffBc6d89d3b44",
   "chainSelectorName": "ethereum-testnet-sepolia-base-1",
-  "gasLimit": "2000000",
+  "gasLimit": "5000000",
   "groqModel": "llama-3.3-70b-versatile",
   "ethUsdPriceFeed": "0x4aDC67d868Ec7b4e3Fb400c68F57fbb0760B53D1",
   "confidenceThreshold": 90

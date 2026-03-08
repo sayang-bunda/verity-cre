@@ -3,6 +3,8 @@ export interface WorkflowInput {
 	question?: string
 	tweetText?: string
 	creator: string
+	/** proposalId from proposeMarket (user $5 deposit). Required for create market. */
+	proposalId: number | string
 }
 
 export interface AIAnalysis {
@@ -16,6 +18,7 @@ export interface AIAnalysis {
 	suggestedDeadline: string
 	targetValue: number | null
 	priceFeedAddress: string | null
+	asset?: string // e.g. "ETH", "BTC" — for CRYPTO, used to lookup price feed
 }
 
 export interface WorkflowResult {

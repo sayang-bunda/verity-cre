@@ -2,10 +2,16 @@ import { z } from 'zod'
 
 export const configSchema = z.object({
 	verityCoreAddress: z.string(),
+	// Hackathon: MockKeystoneForwarder address as writeReport receiver.
+	// Production: omit this field — receiver falls back to verityCoreAddress (real Keystone Forwarder handles routing).
+	writeReportReceiver: z.string().optional(),
 	chainSelectorName: z.string(),
 	gasLimit: z.string(),
 	defaultFeeBps: z.number(),
 	groqModel: z.string(),
+	// Chainlink price feed addresses per asset (for CRYPTO category)
+	// Key: asset symbol (ETH, BTC, etc.), Value: Chainlink feed address
+	priceFeeds: z.record(z.string()).optional(),
 })
 
 export type Config = z.infer<typeof configSchema>
