@@ -1,6 +1,6 @@
 {
-  "verityCoreAddress": "0x8534397816cD5c866cf7ba542A5ffBc6d89d3b44",
-  "writeReportReceiver": "0x8534397816cD5c866cf7ba542A5ffBc6d89d3b44",
+  "verityCoreAddress": "0xBcACD632254b7066353130D540fbBd9C44858226",
+  "writeReportReceiver": "0xBcACD632254b7066353130D540fbBd9C44858226",
   "chainSelectorName": "123456",
   "gasLimit": "2000000",
   "defaultFeeBps": 200,

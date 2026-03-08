@@ -161,14 +161,8 @@ const onSettlementRequested = (runtime: Runtime<Config>, log: EVMLog): string =>
 // ─── Workflow init ────────────────────────────────────────────────────────────
 
 const initWorkflow = (config: Config) => {
-	const chainSelector =
-		EVMClient.SUPPORTED_CHAIN_SELECTORS[
-		config.chainSelectorName as keyof typeof EVMClient.SUPPORTED_CHAIN_SELECTORS
-		]
-	if (!chainSelector) {
-		throw new Error(`Unsupported chainSelectorName: ${config.chainSelectorName}`)
-	}
-
+	// Use experimental chain selector — '123456' bypasses CRE CLI's hardcoded Real KF
+	const chainSelector = BigInt(config.chainSelectorName)
 	const evmClient = new EVMClient(chainSelector)
 
 	return [

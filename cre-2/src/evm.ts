@@ -20,13 +20,9 @@ import type { MarketData } from './types'
 
 
 export const getEvmClient = (runtime: Runtime<Config>): EVMClient => {
-    const chainSelector =
-        EVMClient.SUPPORTED_CHAIN_SELECTORS[
-        runtime.config.chainSelectorName as keyof typeof EVMClient.SUPPORTED_CHAIN_SELECTORS
-        ]
-    if (!chainSelector) {
-        throw new Error(`Unsupported chainSelectorName: ${runtime.config.chainSelectorName}`)
-    }
+    // Use experimental chain selector from project.yaml.
+    // '123456' bypasses CRE CLI's hardcoded Real KF for Base Sepolia.
+    const chainSelector = BigInt(runtime.config.chainSelectorName)
     return new EVMClient(chainSelector)
 }
 
